@@ -12,7 +12,7 @@ Go 编写的桌面原生 UI。控件、保留式布局、文本栅格化、输�
 
 `v0.1.0` 首版准备中，采用 [MIT 许可证](LICENSE)。这是独立 API，不提供 mygo 的源码或 import 兼容层。
 
-Linux X11 已进行原生窗口、像素读回与 AT-SPI 测试；Windows/macOS 目前只在本机完成交叉构建，仍需真机验收。GitHub CI 配置已提供，结果以远端实际运行记录为准。
+Linux X11 已进行原生窗口、像素读回与 AT-SPI 测试。[GitHub CI](https://github.com/zatxm/fego/actions/runs/44029829813) 已在 Windows amd64 与 macOS arm64 托管运行器通过单测及原生窗口冒烟测试，并通过 Linux 原生/race 与六目标交叉构建。其他架构的桌面运行、人工输入法/读屏和物理屏幕延迟仍需验收。
 
 [首版变更](CHANGELOG.md) · [性能验证](benchmarks/README.md)
 
@@ -34,7 +34,7 @@ go test -race ./ui ./internal/text
 
 Linux 运行需要 X11 与系统字体；没有系统拉丁字体时使用内嵌 Go 字体。中文使用系统 Noto CJK、微软雅黑、苹方等字体。Linux 推荐安装 Noto Sans 与 Noto Sans CJK。
 
-当前使用 CPU 绘制，保留脏区重绘、虚拟列表和滚动像素复用。应用不创建 EGL/WGL/NSOpenGL 上下文，不再提供 GPU 渲染器及选择开关。之前的 GPU 对照作为历史记录保留在基准文档中。
+当前使用 CPU 绘制，保留脏区重绘、虚拟列表和滚动像素复用。应用不创建 EGL/WGL/NSOpenGL 上下文，不再提供 GPU 渲染器及选择开关。历史实验的机器原始记录保留在本地。
 
 文本布局缓存限制为 128 项/128 KiB，事件队列清空回调后复用；没有设置进程全局 GC 或内存限制。
 
