@@ -1,0 +1,15 @@
+# Local build, profiling and screenshot output.
+/bin/
+/dist/
+/.cache/
+*.test
+*.test.exe
+*.prof
+*.pprof
+*.cpu
+*.heap
+/gallery.png
+
+# Historical machine-specific measurements stay local.
+/benchmarks/*.json
+!/benchmarks/latest-results.json

@@ -1,0 +1,2655 @@
+{
+  "schemaVersion": 1,
+  "release": "v0.1.0 candidate, not yet published",
+  "baseline": "Previous local optimized8 source, not a published Git tag",
+  "dateUTC": "2026-11-17T03:36:18Z",
+  "platform": {
+    "os": "linux",
+    "arch": "amd64",
+    "cpu": "AMD Ryzen 7 7840HS w/ Radeon 780M Graphics",
+    "goVersion": "go1.27.3"
+  },
+  "calibration": {
+    "display": "private Xvfb software display",
+    "affinity": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "powerProfile": "performance",
+    "profileHold": "powerprofilesctl launch; automatic release on exit",
+    "gc": "No forced GC or global GC settings in native runs",
+    "accessibility": "Private D-Bus and real AT-SPI registry; query trees remain active; registry CPU is outside Xvfb group"
+  },
+  "warmupFrames": 60,
+  "measuredFrames": 600,
+  "rounds": 5,
+  "idleSeconds": 1,
+  "buildFlags": [
+    "CGO_ENABLED=0",
+    "-buildvcs=false",
+    "-trimpath",
+    "-ldflags=-s -w"
+  ],
+  "binaries": {
+    "before": {
+      "sha256": "4fcd164617837420c3868f1f5f576b43395396f750105f98965a196cff8ef294",
+      "sourceSHA256": "19acaaf252dd945be92a48e23cf66cdd9138893842f43b54306ca9f718c54049"
+    },
+    "fego": {
+      "sha256": "9248931ea2d1eb28b9165ff1c3257b5f4dbbdd0cb456fa142ae75f684e36b920",
+      "sourceSHA256": "3c3dcecae0f97643e3e78e79088f068d0a405ddf00eb5fad3cf02bb594dcb44c"
+    }
+  },
+  "summary": {
+    "before": {
+      "counter": {
+        "appCPUPercent": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "goHeapResidentMiB": {
+          "median": 2.359375,
+          "min": 2.16015625,
+          "max": 2.44921875
+        },
+        "peakRSSMiB": {
+          "median": 11.37890625,
+          "min": 11.125,
+          "max": 11.78125
+        },
+        "pssMiB": {
+          "median": 8.7568359375,
+          "min": 8.5234375,
+          "max": 9.162109375
+        },
+        "rssMiB": {
+          "median": 11.37890625,
+          "min": 11.125,
+          "max": 11.78125
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.7587890625,
+          "min": 47.658203125,
+          "max": 47.9951171875
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.81640625
+        },
+        "serverCPUPercent": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "serverPSSMiB": {
+          "median": 47.7509765625,
+          "min": 47.6533203125,
+          "max": 47.9921875
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.81640625
+        },
+        "startupMs": {
+          "median": 5.551153,
+          "min": 5.401491,
+          "max": 6.295344
+        },
+        "totalPSSMiB": {
+          "median": 56.41015625,
+          "min": 56.2607421875,
+          "max": 57.154296875
+        },
+        "totalRSSMiBSum": {
+          "median": 72.76171875,
+          "min": 72.5078125,
+          "max": 73.59765625
+        }
+      },
+      "form": {
+        "appCPUUsPerFrame": {
+          "median": 733.3333333333334,
+          "min": 700,
+          "max": 816.6666666666666
+        },
+        "fps": {
+          "median": 60.00083401159276,
+          "min": 59.99845203993737,
+          "max": 60.005538511204584
+        },
+        "frameP50Ms": {
+          "median": 16.538,
+          "min": 16.528,
+          "max": 16.564
+        },
+        "frameP99Ms": {
+          "median": 17.645,
+          "min": 17.636,
+          "max": 17.699
+        },
+        "goHeapResidentMiB": {
+          "median": 5.38671875,
+          "min": 5.36328125,
+          "max": 5.46875
+        },
+        "peakRSSMiB": {
+          "median": 15.49609375,
+          "min": 15.4453125,
+          "max": 15.625
+        },
+        "pssMiB": {
+          "median": 12.87109375,
+          "min": 12.8212890625,
+          "max": 12.994140625
+        },
+        "rssMiB": {
+          "median": 15.49609375,
+          "min": 15.4453125,
+          "max": 15.625
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 133.33333333333334,
+          "min": 133.33333333333334,
+          "max": 150
+        },
+        "serverPSSMiB": {
+          "median": 47.6533203125,
+          "min": 47.6513671875,
+          "max": 47.7529296875
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 8.743823,
+          "min": 8.362378,
+          "max": 13.219543
+        },
+        "totalCPUUsPerFrame": {
+          "median": 883.3333333333334,
+          "min": 833.3333333333334,
+          "max": 950
+        },
+        "totalPSSMiB": {
+          "median": 60.59375,
+          "min": 60.5244140625,
+          "max": 60.6455078125
+        },
+        "totalRSSMiBSum": {
+          "median": 76.87890625,
+          "min": 76.828125,
+          "max": 77.0078125
+        }
+      },
+      "grid": {
+        "appCPUUsPerFrame": {
+          "median": 2616.6666666666665,
+          "min": 2583.3333333333335,
+          "max": 2650
+        },
+        "fps": {
+          "median": 59.99774408482241,
+          "min": 59.993478708864345,
+          "max": 60.00150003750094
+        },
+        "frameP50Ms": {
+          "median": 16.489,
+          "min": 16.473,
+          "max": 16.542
+        },
+        "frameP99Ms": {
+          "median": 17.789,
+          "min": 17.763,
+          "max": 17.837
+        },
+        "goHeapResidentMiB": {
+          "median": 7.45703125,
+          "min": 7.35546875,
+          "max": 7.65234375
+        },
+        "peakRSSMiB": {
+          "median": 18.13671875,
+          "min": 18.08984375,
+          "max": 18.3828125
+        },
+        "pssMiB": {
+          "median": 15.5146484375,
+          "min": 15.4736328125,
+          "max": 15.7451171875
+        },
+        "rssMiB": {
+          "median": 18.13671875,
+          "min": 18.08984375,
+          "max": 18.3828125
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.625,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 466.6666666666667,
+          "min": 450,
+          "max": 466.6666666666667
+        },
+        "serverPSSMiB": {
+          "median": 47.65234375,
+          "min": 47.6513671875,
+          "max": 47.7509765625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 9.447761,
+          "min": 9.364841,
+          "max": 14.144336
+        },
+        "totalCPUUsPerFrame": {
+          "median": 3083.333333333333,
+          "min": 3033.3333333333335,
+          "max": 3116.6666666666665
+        },
+        "totalPSSMiB": {
+          "median": 63.1904296875,
+          "min": 63.1328125,
+          "max": 63.396484375
+        },
+        "totalRSSMiBSum": {
+          "median": 79.51953125,
+          "min": 79.47265625,
+          "max": 79.765625
+        }
+      },
+      "image": {
+        "appCPUUsPerFrame": {
+          "median": 1800,
+          "min": 1766.6666666666667,
+          "max": 1816.6666666666667
+        },
+        "fps": {
+          "median": 59.9983260467033,
+          "min": 59.99710213996664,
+          "max": 60.00156604087367
+        },
+        "frameP50Ms": {
+          "median": 16.623,
+          "min": 16.6,
+          "max": 16.637
+        },
+        "frameP99Ms": {
+          "median": 17.747,
+          "min": 17.73,
+          "max": 17.776
+        },
+        "goHeapResidentMiB": {
+          "median": 4.06640625,
+          "min": 4.01953125,
+          "max": 4.08203125
+        },
+        "peakRSSMiB": {
+          "median": 13.828125,
+          "min": 13.7734375,
+          "max": 13.9140625
+        },
+        "pssMiB": {
+          "median": 11.232421875,
+          "min": 11.1552734375,
+          "max": 11.2958984375
+        },
+        "rssMiB": {
+          "median": 13.828125,
+          "min": 13.7734375,
+          "max": 13.9140625
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 483.3333333333333,
+          "min": 466.6666666666667,
+          "max": 483.3333333333333
+        },
+        "serverPSSMiB": {
+          "median": 47.7509765625,
+          "min": 47.6513671875,
+          "max": 47.7529296875
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 7.879766,
+          "min": 7.729608,
+          "max": 8.393314
+        },
+        "totalCPUUsPerFrame": {
+          "median": 2283.3333333333335,
+          "min": 2250,
+          "max": 2300
+        },
+        "totalPSSMiB": {
+          "median": 58.9599609375,
+          "min": 58.806640625,
+          "max": 59.048828125
+        },
+        "totalRSSMiBSum": {
+          "median": 75.2109375,
+          "min": 75.15625,
+          "max": 75.296875
+        }
+      },
+      "list": {
+        "appCPUUsPerFrame": {
+          "median": 683.3333333333334,
+          "min": 666.6666666666666,
+          "max": 733.3333333333334
+        },
+        "fps": {
+          "median": 60.000384002457615,
+          "min": 59.994450513327514,
+          "max": 60.003012151209994
+        },
+        "frameP50Ms": {
+          "median": 16.595,
+          "min": 16.575,
+          "max": 16.613
+        },
+        "frameP99Ms": {
+          "median": 17.691,
+          "min": 17.666,
+          "max": 17.746
+        },
+        "goHeapResidentMiB": {
+          "median": 5.41015625,
+          "min": 5.26171875,
+          "max": 5.82421875
+        },
+        "peakRSSMiB": {
+          "median": 15.703125,
+          "min": 15.4609375,
+          "max": 16.125
+        },
+        "pssMiB": {
+          "median": 13.072265625,
+          "min": 12.8447265625,
+          "max": 13.5048828125
+        },
+        "rssMiB": {
+          "median": 15.703125,
+          "min": 15.4609375,
+          "max": 16.125
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6943359375,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.4609375
+        },
+        "serverCPUUsPerFrame": {
+          "median": 266.6666666666667,
+          "min": 250,
+          "max": 283.3333333333333
+        },
+        "serverPSSMiB": {
+          "median": 47.6513671875,
+          "min": 47.6279296875,
+          "max": 47.7509765625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3984375
+        },
+        "startupMs": {
+          "median": 8.764173,
+          "min": 8.093963,
+          "max": 25.866599
+        },
+        "totalCPUUsPerFrame": {
+          "median": 950,
+          "min": 916.6666666666666,
+          "max": 1016.6666666666667
+        },
+        "totalPSSMiB": {
+          "median": 60.767578125,
+          "min": 60.49609375,
+          "max": 61.255859375
+        },
+        "totalRSSMiBSum": {
+          "median": 77.1015625,
+          "min": 76.84375,
+          "max": 77.5078125
+        }
+      },
+      "richtext": {
+        "appCPUUsPerFrame": {
+          "median": 750,
+          "min": 700,
+          "max": 783.3333333333334
+        },
+        "fps": {
+          "median": 60.00123602546213,
+          "min": 59.99669418215056,
+          "max": 60.00375023438965
+        },
+        "frameP50Ms": {
+          "median": 16.608,
+          "min": 16.587,
+          "max": 16.62
+        },
+        "frameP99Ms": {
+          "median": 17.705,
+          "min": 17.685,
+          "max": 17.774
+        },
+        "goHeapResidentMiB": {
+          "median": 6.25,
+          "min": 6.0078125,
+          "max": 6.2734375
+        },
+        "peakRSSMiB": {
+          "median": 16.53125,
+          "min": 16.453125,
+          "max": 16.61328125
+        },
+        "pssMiB": {
+          "median": 13.9013671875,
+          "min": 13.828125,
+          "max": 13.9736328125
+        },
+        "rssMiB": {
+          "median": 16.53125,
+          "min": 16.453125,
+          "max": 16.61328125
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.7587890625,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 266.6666666666667,
+          "min": 266.6666666666667,
+          "max": 283.3333333333333
+        },
+        "serverPSSMiB": {
+          "median": 47.7509765625,
+          "min": 47.6513671875,
+          "max": 47.7509765625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 10.853509,
+          "min": 10.553878,
+          "max": 10.931249
+        },
+        "totalCPUUsPerFrame": {
+          "median": 1016.6666666666667,
+          "min": 966.6666666666667,
+          "max": 1066.6666666666667
+        },
+        "totalPSSMiB": {
+          "median": 61.63671875,
+          "min": 61.4814453125,
+          "max": 61.689453125
+        },
+        "totalRSSMiBSum": {
+          "median": 77.9140625,
+          "min": 77.8359375,
+          "max": 77.99609375
+        }
+      }
+    },
+    "fego": {
+      "counter": {
+        "appCPUPercent": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "goHeapResidentMiB": {
+          "median": 2.23046875,
+          "min": 2.1875,
+          "max": 2.41796875
+        },
+        "peakRSSMiB": {
+          "median": 11.35546875,
+          "min": 11.24609375,
+          "max": 11.515625
+        },
+        "pssMiB": {
+          "median": 8.7197265625,
+          "min": 8.625,
+          "max": 8.890625
+        },
+        "rssMiB": {
+          "median": 11.35546875,
+          "min": 11.24609375,
+          "max": 11.515625
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.7587890625,
+          "min": 47.658203125,
+          "max": 47.8583984375
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.5859375
+        },
+        "serverCPUPercent": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "serverPSSMiB": {
+          "median": 47.7509765625,
+          "min": 47.6513671875,
+          "max": 47.990234375
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.81640625
+        },
+        "startupMs": {
+          "median": 5.738506,
+          "min": 5.56615,
+          "max": 7.026888
+        },
+        "totalPSSMiB": {
+          "median": 56.5205078125,
+          "min": 56.2763671875,
+          "max": 56.65234375
+        },
+        "totalRSSMiBSum": {
+          "median": 72.76171875,
+          "min": 72.62890625,
+          "max": 73.1171875
+        }
+      },
+      "form": {
+        "appCPUUsPerFrame": {
+          "median": 700,
+          "min": 666.6666666666666,
+          "max": 716.6666666666666
+        },
+        "fps": {
+          "median": 59.998656030104925,
+          "min": 59.9959322757917,
+          "max": 60.003006150608144
+        },
+        "frameP50Ms": {
+          "median": 16.505,
+          "min": 16.495,
+          "max": 16.515
+        },
+        "frameP99Ms": {
+          "median": 17.602,
+          "min": 17.583,
+          "max": 17.64
+        },
+        "goHeapResidentMiB": {
+          "median": 5.3046875,
+          "min": 5.25,
+          "max": 5.56640625
+        },
+        "peakRSSMiB": {
+          "median": 15.62890625,
+          "min": 15.52734375,
+          "max": 15.75
+        },
+        "pssMiB": {
+          "median": 13.0078125,
+          "min": 12.908203125,
+          "max": 13.1279296875
+        },
+        "rssMiB": {
+          "median": 15.62890625,
+          "min": 15.52734375,
+          "max": 15.75
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 133.33333333333334,
+          "min": 116.66666666666667,
+          "max": 133.33333333333334
+        },
+        "serverPSSMiB": {
+          "median": 47.6513671875,
+          "min": 47.6513671875,
+          "max": 47.7529296875
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 8.944786,
+          "min": 8.790918,
+          "max": 10.079276
+        },
+        "totalCPUUsPerFrame": {
+          "median": 833.3333333333334,
+          "min": 800,
+          "max": 850
+        },
+        "totalPSSMiB": {
+          "median": 60.6591796875,
+          "min": 60.623046875,
+          "max": 60.779296875
+        },
+        "totalRSSMiBSum": {
+          "median": 77.01171875,
+          "min": 76.91015625,
+          "max": 77.1328125
+        }
+      },
+      "grid": {
+        "appCPUUsPerFrame": {
+          "median": 2516.6666666666665,
+          "min": 2500,
+          "max": 2533.3333333333335
+        },
+        "fps": {
+          "median": 59.99894401858527,
+          "min": 59.99802006533784,
+          "max": 60.00264611669375
+        },
+        "frameP50Ms": {
+          "median": 16.443,
+          "min": 16.423,
+          "max": 16.465
+        },
+        "frameP99Ms": {
+          "median": 17.801,
+          "min": 17.666,
+          "max": 17.882
+        },
+        "goHeapResidentMiB": {
+          "median": 7.42578125,
+          "min": 7.265625,
+          "max": 7.51171875
+        },
+        "peakRSSMiB": {
+          "median": 18.2734375,
+          "min": 18.21484375,
+          "max": 18.45703125
+        },
+        "pssMiB": {
+          "median": 15.591796875,
+          "min": 15.4462890625,
+          "max": 15.71484375
+        },
+        "rssMiB": {
+          "median": 18.21484375,
+          "min": 18.0859375,
+          "max": 18.33984375
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.6318359375,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3984375
+        },
+        "serverCPUUsPerFrame": {
+          "median": 466.6666666666667,
+          "min": 450,
+          "max": 466.6666666666667
+        },
+        "serverPSSMiB": {
+          "median": 47.6533203125,
+          "min": 47.6513671875,
+          "max": 47.7509765625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 9.721593,
+          "min": 9.261789,
+          "max": 9.892175
+        },
+        "totalCPUUsPerFrame": {
+          "median": 2966.6666666666665,
+          "min": 2950,
+          "max": 3000
+        },
+        "totalPSSMiB": {
+          "median": 63.3291015625,
+          "min": 63.09765625,
+          "max": 63.3681640625
+        },
+        "totalRSSMiBSum": {
+          "median": 79.59765625,
+          "min": 79.46875,
+          "max": 79.72265625
+        }
+      },
+      "image": {
+        "appCPUUsPerFrame": {
+          "median": 1683.3333333333333,
+          "min": 1666.6666666666667,
+          "max": 1733.3333333333333
+        },
+        "fps": {
+          "median": 60.00146403572247,
+          "min": 59.99633422397891,
+          "max": 60.00459635208057
+        },
+        "frameP50Ms": {
+          "median": 16.549,
+          "min": 16.525,
+          "max": 16.562
+        },
+        "frameP99Ms": {
+          "median": 17.768,
+          "min": 17.67,
+          "max": 17.905
+        },
+        "goHeapResidentMiB": {
+          "median": 4.0859375,
+          "min": 4.05859375,
+          "max": 4.140625
+        },
+        "peakRSSMiB": {
+          "median": 13.984375,
+          "min": 13.9453125,
+          "max": 14.05859375
+        },
+        "pssMiB": {
+          "median": 11.36328125,
+          "min": 11.34375,
+          "max": 11.4423828125
+        },
+        "rssMiB": {
+          "median": 13.984375,
+          "min": 13.9453125,
+          "max": 14.05859375
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.6591796875,
+          "min": 47.6591796875,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 483.3333333333333,
+          "min": 466.6666666666667,
+          "max": 500
+        },
+        "serverPSSMiB": {
+          "median": 47.6513671875,
+          "min": 47.6513671875,
+          "max": 47.7529296875
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 7.785795,
+          "min": 7.561945,
+          "max": 8.072252
+        },
+        "totalCPUUsPerFrame": {
+          "median": 2166.666666666667,
+          "min": 2150,
+          "max": 2216.6666666666665
+        },
+        "totalPSSMiB": {
+          "median": 59.09375,
+          "min": 58.9951171875,
+          "max": 59.1220703125
+        },
+        "totalRSSMiBSum": {
+          "median": 75.3671875,
+          "min": 75.328125,
+          "max": 75.44140625
+        }
+      },
+      "list": {
+        "appCPUUsPerFrame": {
+          "median": 700,
+          "min": 666.6666666666666,
+          "max": 716.6666666666666
+        },
+        "fps": {
+          "median": 59.99876402546108,
+          "min": 59.99697615240192,
+          "max": 60.00310816100274
+        },
+        "frameP50Ms": {
+          "median": 16.499,
+          "min": 16.487,
+          "max": 16.507
+        },
+        "frameP99Ms": {
+          "median": 17.683,
+          "min": 17.645,
+          "max": 17.689
+        },
+        "goHeapResidentMiB": {
+          "median": 5.6875,
+          "min": 5.578125,
+          "max": 6.03125
+        },
+        "peakRSSMiB": {
+          "median": 16.0234375,
+          "min": 15.6640625,
+          "max": 16.44140625
+        },
+        "pssMiB": {
+          "median": 13.390625,
+          "min": 13.033203125,
+          "max": 13.8203125
+        },
+        "rssMiB": {
+          "median": 16.0234375,
+          "min": 15.6640625,
+          "max": 16.44140625
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.7587890625,
+          "min": 47.658203125,
+          "max": 47.9951171875
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.81640625
+        },
+        "serverCPUUsPerFrame": {
+          "median": 266.6666666666667,
+          "min": 250,
+          "max": 283.3333333333333
+        },
+        "serverPSSMiB": {
+          "median": 47.6904296875,
+          "min": 47.6201171875,
+          "max": 47.75390625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.4609375
+        },
+        "startupMs": {
+          "median": 7.81153,
+          "min": 7.409242,
+          "max": 7.995085
+        },
+        "totalCPUUsPerFrame": {
+          "median": 966.6666666666667,
+          "min": 916.6666666666666,
+          "max": 1000
+        },
+        "totalPSSMiB": {
+          "median": 61.0107421875,
+          "min": 60.7236328125,
+          "max": 61.57421875
+        },
+        "totalRSSMiBSum": {
+          "median": 77.40625,
+          "min": 77.125,
+          "max": 77.82421875
+        }
+      },
+      "richtext": {
+        "appCPUUsPerFrame": {
+          "median": 750,
+          "min": 716.6666666666666,
+          "max": 800
+        },
+        "fps": {
+          "median": 60.000822011261555,
+          "min": 59.99601026531736,
+          "max": 60.00262811511144
+        },
+        "frameP50Ms": {
+          "median": 16.534,
+          "min": 16.517,
+          "max": 16.576
+        },
+        "frameP99Ms": {
+          "median": 17.683,
+          "min": 17.636,
+          "max": 17.712
+        },
+        "goHeapResidentMiB": {
+          "median": 6.234375,
+          "min": 5.87890625,
+          "max": 6.5
+        },
+        "peakRSSMiB": {
+          "median": 16.61328125,
+          "min": 16.27734375,
+          "max": 16.9609375
+        },
+        "pssMiB": {
+          "median": 13.974609375,
+          "min": 13.6591796875,
+          "max": 14.337890625
+        },
+        "rssMiB": {
+          "median": 16.5859375,
+          "min": 16.27734375,
+          "max": 16.9609375
+        },
+        "serverBaselinePSSMiB": {
+          "median": 47.7587890625,
+          "min": 47.658203125,
+          "max": 47.7587890625
+        },
+        "serverBaselineRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "serverCPUUsPerFrame": {
+          "median": 283.3333333333333,
+          "min": 266.6666666666667,
+          "max": 316.6666666666667
+        },
+        "serverPSSMiB": {
+          "median": 47.7529296875,
+          "min": 47.6533203125,
+          "max": 47.75390625
+        },
+        "serverRSSMiB": {
+          "median": 61.3828125,
+          "min": 61.3828125,
+          "max": 61.3828125
+        },
+        "startupMs": {
+          "median": 10.518223,
+          "min": 10.095517,
+          "max": 11.010319
+        },
+        "totalCPUUsPerFrame": {
+          "median": 1016.6666666666667,
+          "min": 983.3333333333333,
+          "max": 1116.6666666666667
+        },
+        "totalPSSMiB": {
+          "median": 61.7275390625,
+          "min": 61.3125,
+          "max": 62.0908203125
+        },
+        "totalRSSMiBSum": {
+          "median": 77.96875,
+          "min": 77.66015625,
+          "max": 78.34375
+        }
+      }
+    }
+  },
+  "samples": [
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.1875,
+        "peakRSSMiB": 11.30078125,
+        "pssMiB": 8.662109375,
+        "rssMiB": 11.30078125,
+        "serverBaselinePSSMiB": 47.8583984375,
+        "serverBaselineRSSMiB": 61.5859375,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.990234375,
+        "serverRSSMiB": 61.81640625,
+        "startupMs": 5.56615,
+        "totalPSSMiB": 56.65234375,
+        "totalRSSMiBSum": 73.1171875
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.38671875,
+        "peakRSSMiB": 11.78125,
+        "pssMiB": 9.162109375,
+        "rssMiB": 11.78125,
+        "serverBaselinePSSMiB": 47.9951171875,
+        "serverBaselineRSSMiB": 61.81640625,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.9921875,
+        "serverRSSMiB": 61.81640625,
+        "startupMs": 5.401491,
+        "totalPSSMiB": 57.154296875,
+        "totalRSSMiBSum": 73.59765625
+      }
+    },
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 59.999412005762345,
+        "frameP50Ms": 16.498,
+        "frameP99Ms": 17.645,
+        "goHeapResidentMiB": 5.578125,
+        "peakRSSMiB": 15.6640625,
+        "pssMiB": 13.033203125,
+        "rssMiB": 15.6640625,
+        "serverBaselinePSSMiB": 47.9951171875,
+        "serverBaselineRSSMiB": 61.81640625,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6904296875,
+        "serverRSSMiB": 61.4609375,
+        "startupMs": 7.409242,
+        "totalCPUUsPerFrame": 966.6666666666667,
+        "totalPSSMiB": 60.7236328125,
+        "totalRSSMiBSum": 77.125
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 60.003012151209994,
+        "frameP50Ms": 16.592,
+        "frameP99Ms": 17.686,
+        "goHeapResidentMiB": 5.3828125,
+        "peakRSSMiB": 15.703125,
+        "pssMiB": 13.072265625,
+        "rssMiB": 15.703125,
+        "serverBaselinePSSMiB": 47.6943359375,
+        "serverBaselineRSSMiB": 61.4609375,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6279296875,
+        "serverRSSMiB": 61.3984375,
+        "startupMs": 25.866599,
+        "totalCPUUsPerFrame": 966.6666666666667,
+        "totalPSSMiB": 60.7001953125,
+        "totalRSSMiBSum": 77.1015625
+      }
+    },
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2516.6666666666665,
+        "fps": 59.998422041500305,
+        "frameP50Ms": 16.439,
+        "frameP99Ms": 17.666,
+        "goHeapResidentMiB": 7.265625,
+        "peakRSSMiB": 18.2734375,
+        "pssMiB": 15.4462890625,
+        "rssMiB": 18.0859375,
+        "serverBaselinePSSMiB": 47.6318359375,
+        "serverBaselineRSSMiB": 61.3984375,
+        "serverCPUUsPerFrame": 450,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.892175,
+        "totalCPUUsPerFrame": 2966.6666666666665,
+        "totalPSSMiB": 63.09765625,
+        "totalRSSMiBSum": 79.46875
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2583.3333333333335,
+        "fps": 59.99466647415045,
+        "frameP50Ms": 16.473,
+        "frameP99Ms": 17.763,
+        "goHeapResidentMiB": 7.41796875,
+        "peakRSSMiB": 18.10546875,
+        "pssMiB": 15.48046875,
+        "rssMiB": 18.10546875,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 450,
+        "serverPSSMiB": 47.65234375,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 14.144336,
+        "totalCPUUsPerFrame": 3033.3333333333335,
+        "totalPSSMiB": 63.1328125,
+        "totalRSSMiBSum": 79.48828125
+      }
+    },
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 60.003006150608144,
+        "frameP50Ms": 16.505,
+        "frameP99Ms": 17.592,
+        "goHeapResidentMiB": 5.3046875,
+        "peakRSSMiB": 15.5859375,
+        "pssMiB": 12.9716796875,
+        "rssMiB": 15.5859375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.944786,
+        "totalCPUUsPerFrame": 833.3333333333334,
+        "totalPSSMiB": 60.623046875,
+        "totalRSSMiBSum": 76.96875
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 733.3333333333334,
+        "fps": 60.000360002160015,
+        "frameP50Ms": 16.54,
+        "frameP99Ms": 17.636,
+        "goHeapResidentMiB": 5.46875,
+        "peakRSSMiB": 15.625,
+        "pssMiB": 12.994140625,
+        "rssMiB": 15.625,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 150,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 13.219543,
+        "totalCPUUsPerFrame": 883.3333333333334,
+        "totalPSSMiB": 60.6455078125,
+        "totalRSSMiBSum": 77.0078125
+      }
+    },
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1733.3333333333333,
+        "fps": 60.002088072664925,
+        "frameP50Ms": 16.549,
+        "frameP99Ms": 17.714,
+        "goHeapResidentMiB": 4.140625,
+        "peakRSSMiB": 14.05859375,
+        "pssMiB": 11.4423828125,
+        "rssMiB": 14.05859375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.752871,
+        "totalCPUUsPerFrame": 2216.6666666666665,
+        "totalPSSMiB": 59.09375,
+        "totalRSSMiBSum": 75.44140625
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1766.6666666666667,
+        "fps": 60.00156604087367,
+        "frameP50Ms": 16.6,
+        "frameP99Ms": 17.745,
+        "goHeapResidentMiB": 4.08203125,
+        "peakRSSMiB": 13.8515625,
+        "pssMiB": 11.2333984375,
+        "rssMiB": 13.8515625,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.049123,
+        "totalCPUUsPerFrame": 2250,
+        "totalPSSMiB": 58.88671875,
+        "totalRSSMiBSum": 75.234375
+      }
+    },
+    {
+      "round": 1,
+      "framework": "fego",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 716.6666666666666,
+        "fps": 59.99918401109745,
+        "frameP50Ms": 16.517,
+        "frameP99Ms": 17.636,
+        "goHeapResidentMiB": 5.87890625,
+        "peakRSSMiB": 16.27734375,
+        "pssMiB": 13.6591796875,
+        "rssMiB": 16.27734375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 283.3333333333333,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.095517,
+        "totalCPUUsPerFrame": 1000,
+        "totalPSSMiB": 61.3125,
+        "totalRSSMiBSum": 77.66015625
+      }
+    },
+    {
+      "round": 1,
+      "framework": "before",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 716.6666666666666,
+        "fps": 60.00375023438965,
+        "frameP50Ms": 16.612,
+        "frameP99Ms": 17.702,
+        "goHeapResidentMiB": 6.0078125,
+        "peakRSSMiB": 16.453125,
+        "pssMiB": 13.828125,
+        "rssMiB": 16.453125,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.853509,
+        "totalCPUUsPerFrame": 983.3333333333333,
+        "totalPSSMiB": 61.4814453125,
+        "totalRSSMiBSum": 77.8359375
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.2265625,
+        "peakRSSMiB": 11.2265625,
+        "pssMiB": 8.607421875,
+        "rssMiB": 11.2265625,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 5.551153,
+        "totalPSSMiB": 56.2607421875,
+        "totalRSSMiBSum": 72.609375
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.19921875,
+        "peakRSSMiB": 11.24609375,
+        "pssMiB": 8.625,
+        "rssMiB": 11.24609375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 5.808121,
+        "totalPSSMiB": 56.2763671875,
+        "totalRSSMiBSum": 72.62890625
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 683.3333333333334,
+        "fps": 60.00126602671316,
+        "frameP50Ms": 16.575,
+        "frameP99Ms": 17.666,
+        "goHeapResidentMiB": 5.26171875,
+        "peakRSSMiB": 15.4609375,
+        "pssMiB": 12.8447265625,
+        "rssMiB": 15.4609375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.352829,
+        "totalCPUUsPerFrame": 950,
+        "totalPSSMiB": 60.49609375,
+        "totalRSSMiBSum": 76.84375
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 716.6666666666666,
+        "fps": 59.99876402546108,
+        "frameP50Ms": 16.501,
+        "frameP99Ms": 17.689,
+        "goHeapResidentMiB": 5.6875,
+        "peakRSSMiB": 16.0234375,
+        "pssMiB": 13.390625,
+        "rssMiB": 16.0234375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 283.3333333333333,
+        "serverPSSMiB": 47.6201171875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.600385,
+        "totalCPUUsPerFrame": 1000,
+        "totalPSSMiB": 61.0107421875,
+        "totalRSSMiBSum": 77.40625
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2616.6666666666665,
+        "fps": 59.99774408482241,
+        "frameP50Ms": 16.489,
+        "frameP99Ms": 17.789,
+        "goHeapResidentMiB": 7.45703125,
+        "peakRSSMiB": 18.13671875,
+        "pssMiB": 15.5146484375,
+        "rssMiB": 18.13671875,
+        "serverBaselinePSSMiB": 47.625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 13.765534,
+        "totalCPUUsPerFrame": 3083.333333333333,
+        "totalPSSMiB": 63.166015625,
+        "totalRSSMiBSum": 79.51953125
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2533.3333333333335,
+        "fps": 60.00264611669375,
+        "frameP50Ms": 16.465,
+        "frameP99Ms": 17.851,
+        "goHeapResidentMiB": 7.5078125,
+        "peakRSSMiB": 18.45703125,
+        "pssMiB": 15.71484375,
+        "rssMiB": 18.33984375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.637609,
+        "totalCPUUsPerFrame": 3000,
+        "totalPSSMiB": 63.3681640625,
+        "totalRSSMiBSum": 79.72265625
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 750,
+        "fps": 60.00373823289191,
+        "frameP50Ms": 16.538,
+        "frameP99Ms": 17.645,
+        "goHeapResidentMiB": 5.37890625,
+        "peakRSSMiB": 15.49609375,
+        "pssMiB": 12.87109375,
+        "rssMiB": 15.49609375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.541047,
+        "totalCPUUsPerFrame": 883.3333333333334,
+        "totalPSSMiB": 60.5244140625,
+        "totalRSSMiBSum": 76.87890625
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 666.6666666666666,
+        "fps": 59.99954400346557,
+        "frameP50Ms": 16.495,
+        "frameP99Ms": 17.614,
+        "goHeapResidentMiB": 5.56640625,
+        "peakRSSMiB": 15.75,
+        "pssMiB": 13.1279296875,
+        "rssMiB": 15.75,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.195172,
+        "totalCPUUsPerFrame": 800,
+        "totalPSSMiB": 60.779296875,
+        "totalRSSMiBSum": 77.1328125
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1783.3333333333333,
+        "fps": 59.9997420011094,
+        "frameP50Ms": 16.623,
+        "frameP99Ms": 17.73,
+        "goHeapResidentMiB": 4.01953125,
+        "peakRSSMiB": 13.7734375,
+        "pssMiB": 11.1552734375,
+        "rssMiB": 13.7734375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.827405,
+        "totalCPUUsPerFrame": 2250,
+        "totalPSSMiB": 58.806640625,
+        "totalRSSMiBSum": 75.15625
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1683.3333333333333,
+        "fps": 60.00459635208057,
+        "frameP50Ms": 16.557,
+        "frameP99Ms": 17.67,
+        "goHeapResidentMiB": 4.05859375,
+        "peakRSSMiB": 13.9453125,
+        "pssMiB": 11.34375,
+        "rssMiB": 13.9453125,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.561945,
+        "totalCPUUsPerFrame": 2150,
+        "totalPSSMiB": 58.9951171875,
+        "totalRSSMiBSum": 75.328125
+      }
+    },
+    {
+      "round": 2,
+      "framework": "before",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 750,
+        "fps": 59.99669418215056,
+        "frameP50Ms": 16.608,
+        "frameP99Ms": 17.734,
+        "goHeapResidentMiB": 6.25,
+        "peakRSSMiB": 16.61328125,
+        "pssMiB": 13.9736328125,
+        "rssMiB": 16.61328125,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.553878,
+        "totalCPUUsPerFrame": 1016.6666666666667,
+        "totalPSSMiB": 61.625,
+        "totalRSSMiBSum": 77.99609375
+      }
+    },
+    {
+      "round": 2,
+      "framework": "fego",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 750,
+        "fps": 59.99601026531736,
+        "frameP50Ms": 16.534,
+        "frameP99Ms": 17.671,
+        "goHeapResidentMiB": 6.2890625,
+        "peakRSSMiB": 16.7109375,
+        "pssMiB": 14.0859375,
+        "rssMiB": 16.7109375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.842899,
+        "totalCPUUsPerFrame": 1016.6666666666667,
+        "totalPSSMiB": 61.7392578125,
+        "totalRSSMiBSum": 78.09375
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.41796875,
+        "peakRSSMiB": 11.515625,
+        "pssMiB": 8.890625,
+        "rssMiB": 11.515625,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.026888,
+        "totalPSSMiB": 56.5439453125,
+        "totalRSSMiBSum": 72.8984375
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.359375,
+        "peakRSSMiB": 11.37890625,
+        "pssMiB": 8.7568359375,
+        "rssMiB": 11.37890625,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 6.295344,
+        "totalPSSMiB": 56.41015625,
+        "totalRSSMiBSum": 72.76171875
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 59.99875202595786,
+        "frameP50Ms": 16.507,
+        "frameP99Ms": 17.683,
+        "goHeapResidentMiB": 5.60546875,
+        "peakRSSMiB": 15.98046875,
+        "pssMiB": 13.3583984375,
+        "rssMiB": 15.98046875,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.81153,
+        "totalCPUUsPerFrame": 966.6666666666667,
+        "totalPSSMiB": 61.009765625,
+        "totalRSSMiBSum": 77.36328125
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 733.3333333333334,
+        "fps": 60.000384002457615,
+        "frameP50Ms": 16.605,
+        "frameP99Ms": 17.746,
+        "goHeapResidentMiB": 5.609375,
+        "peakRSSMiB": 15.87109375,
+        "pssMiB": 13.234375,
+        "rssMiB": 15.87109375,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 283.3333333333333,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.321495,
+        "totalCPUUsPerFrame": 1016.6666666666667,
+        "totalPSSMiB": 60.8857421875,
+        "totalRSSMiBSum": 77.25390625
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2516.6666666666665,
+        "fps": 60.002430098418984,
+        "frameP50Ms": 16.451,
+        "frameP99Ms": 17.801,
+        "goHeapResidentMiB": 7.51171875,
+        "peakRSSMiB": 18.28515625,
+        "pssMiB": 15.67578125,
+        "rssMiB": 18.28515625,
+        "serverBaselinePSSMiB": 47.658203125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.261789,
+        "totalCPUUsPerFrame": 2983.333333333333,
+        "totalPSSMiB": 63.3291015625,
+        "totalRSSMiBSum": 79.66796875
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2650,
+        "fps": 59.993478708864345,
+        "frameP50Ms": 16.542,
+        "frameP99Ms": 17.768,
+        "goHeapResidentMiB": 7.65234375,
+        "peakRSSMiB": 18.3828125,
+        "pssMiB": 15.7451171875,
+        "rssMiB": 18.3828125,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.364841,
+        "totalCPUUsPerFrame": 3116.6666666666665,
+        "totalPSSMiB": 63.396484375,
+        "totalRSSMiBSum": 79.765625
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 59.997546100364495,
+        "frameP50Ms": 16.515,
+        "frameP99Ms": 17.583,
+        "goHeapResidentMiB": 5.50390625,
+        "peakRSSMiB": 15.62890625,
+        "pssMiB": 13.0078125,
+        "rssMiB": 15.62890625,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.790918,
+        "totalCPUUsPerFrame": 833.3333333333334,
+        "totalPSSMiB": 60.6591796875,
+        "totalRSSMiBSum": 77.01171875
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 816.6666666666666,
+        "fps": 60.005538511204584,
+        "frameP50Ms": 16.564,
+        "frameP99Ms": 17.685,
+        "goHeapResidentMiB": 5.4453125,
+        "peakRSSMiB": 15.6015625,
+        "pssMiB": 12.9833984375,
+        "rssMiB": 15.6015625,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.6533203125,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.362378,
+        "totalCPUUsPerFrame": 950,
+        "totalPSSMiB": 60.63671875,
+        "totalRSSMiBSum": 76.984375
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1716.6666666666667,
+        "fps": 59.99633422397891,
+        "frameP50Ms": 16.546,
+        "frameP99Ms": 17.787,
+        "goHeapResidentMiB": 4.07421875,
+        "peakRSSMiB": 13.96484375,
+        "pssMiB": 11.34375,
+        "rssMiB": 13.96484375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.6513671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.072252,
+        "totalCPUUsPerFrame": 2200,
+        "totalPSSMiB": 58.9951171875,
+        "totalRSSMiBSum": 75.34765625
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1816.6666666666667,
+        "fps": 59.99710213996664,
+        "frameP50Ms": 16.637,
+        "frameP99Ms": 17.776,
+        "goHeapResidentMiB": 4.0390625,
+        "peakRSSMiB": 13.80859375,
+        "pssMiB": 11.208984375,
+        "rssMiB": 13.80859375,
+        "serverBaselinePSSMiB": 47.6591796875,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.729608,
+        "totalCPUUsPerFrame": 2300,
+        "totalPSSMiB": 58.9599609375,
+        "totalRSSMiBSum": 75.19140625
+      }
+    },
+    {
+      "round": 3,
+      "framework": "fego",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 716.6666666666666,
+        "fps": 60.00262811511144,
+        "frameP50Ms": 16.527,
+        "frameP99Ms": 17.683,
+        "goHeapResidentMiB": 6.1953125,
+        "peakRSSMiB": 16.61328125,
+        "pssMiB": 13.9677734375,
+        "rssMiB": 16.5859375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.75390625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.518223,
+        "totalCPUUsPerFrame": 983.3333333333333,
+        "totalPSSMiB": 61.7216796875,
+        "totalRSSMiBSum": 77.96875
+      }
+    },
+    {
+      "round": 3,
+      "framework": "before",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 60.00114002166041,
+        "frameP50Ms": 16.591,
+        "frameP99Ms": 17.774,
+        "goHeapResidentMiB": 6.25,
+        "peakRSSMiB": 16.53125,
+        "pssMiB": 13.9013671875,
+        "rssMiB": 16.53125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.653523,
+        "totalCPUUsPerFrame": 966.6666666666667,
+        "totalPSSMiB": 61.65234375,
+        "totalRSSMiBSum": 77.9140625
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.16015625,
+        "peakRSSMiB": 11.125,
+        "pssMiB": 8.5234375,
+        "rssMiB": 11.125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 6.134934,
+        "totalPSSMiB": 56.2744140625,
+        "totalRSSMiBSum": 72.5078125
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.2578125,
+        "peakRSSMiB": 11.37890625,
+        "pssMiB": 8.767578125,
+        "rssMiB": 11.37890625,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 5.732249,
+        "totalPSSMiB": 56.5205078125,
+        "totalRSSMiBSum": 72.76171875
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 666.6666666666666,
+        "fps": 59.994450513327514,
+        "frameP50Ms": 16.595,
+        "frameP99Ms": 17.691,
+        "goHeapResidentMiB": 5.41015625,
+        "peakRSSMiB": 15.63671875,
+        "pssMiB": 13.0166015625,
+        "rssMiB": 15.63671875,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 250,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.093963,
+        "totalCPUUsPerFrame": 916.6666666666666,
+        "totalPSSMiB": 60.767578125,
+        "totalRSSMiBSum": 77.01953125
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 666.6666666666666,
+        "fps": 59.99697615240192,
+        "frameP50Ms": 16.499,
+        "frameP99Ms": 17.675,
+        "goHeapResidentMiB": 6.03125,
+        "peakRSSMiB": 16.44140625,
+        "pssMiB": 13.8203125,
+        "rssMiB": 16.44140625,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 250,
+        "serverPSSMiB": 47.75390625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.995085,
+        "totalCPUUsPerFrame": 916.6666666666666,
+        "totalPSSMiB": 61.57421875,
+        "totalRSSMiBSum": 77.82421875
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2616.6666666666665,
+        "fps": 60.00018000054,
+        "frameP50Ms": 16.503,
+        "frameP99Ms": 17.837,
+        "goHeapResidentMiB": 7.53515625,
+        "peakRSSMiB": 18.20703125,
+        "pssMiB": 15.5869140625,
+        "rssMiB": 18.20703125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.447761,
+        "totalCPUUsPerFrame": 3083.333333333333,
+        "totalPSSMiB": 63.337890625,
+        "totalRSSMiBSum": 79.58984375
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2500,
+        "fps": 59.99894401858527,
+        "frameP50Ms": 16.443,
+        "frameP99Ms": 17.756,
+        "goHeapResidentMiB": 7.40234375,
+        "peakRSSMiB": 18.21484375,
+        "pssMiB": 15.5791015625,
+        "rssMiB": 18.21484375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.721593,
+        "totalCPUUsPerFrame": 2966.6666666666665,
+        "totalPSSMiB": 63.330078125,
+        "totalRSSMiBSum": 79.59765625
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 59.99845203993737,
+        "frameP50Ms": 16.528,
+        "frameP99Ms": 17.638,
+        "goHeapResidentMiB": 5.36328125,
+        "peakRSSMiB": 15.4453125,
+        "pssMiB": 12.8212890625,
+        "rssMiB": 15.4453125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.919581,
+        "totalCPUUsPerFrame": 833.3333333333334,
+        "totalPSSMiB": 60.57421875,
+        "totalRSSMiBSum": 76.828125
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 716.6666666666666,
+        "fps": 59.9959322757917,
+        "frameP50Ms": 16.508,
+        "frameP99Ms": 17.64,
+        "goHeapResidentMiB": 5.25,
+        "peakRSSMiB": 15.52734375,
+        "pssMiB": 12.908203125,
+        "rssMiB": 15.52734375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.938458,
+        "totalCPUUsPerFrame": 850,
+        "totalPSSMiB": 60.6591796875,
+        "totalRSSMiBSum": 76.91015625
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1800,
+        "fps": 59.9983260467033,
+        "frameP50Ms": 16.625,
+        "frameP99Ms": 17.747,
+        "goHeapResidentMiB": 4.06640625,
+        "peakRSSMiB": 13.9140625,
+        "pssMiB": 11.2958984375,
+        "rssMiB": 13.9140625,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.393314,
+        "totalCPUUsPerFrame": 2283.3333333333335,
+        "totalPSSMiB": 59.048828125,
+        "totalRSSMiBSum": 75.296875
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1666.6666666666667,
+        "fps": 59.99838004373882,
+        "frameP50Ms": 16.525,
+        "frameP99Ms": 17.768,
+        "goHeapResidentMiB": 4.0859375,
+        "peakRSSMiB": 13.984375,
+        "pssMiB": 11.36328125,
+        "rssMiB": 13.984375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 500,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.785795,
+        "totalCPUUsPerFrame": 2166.666666666667,
+        "totalPSSMiB": 59.1162109375,
+        "totalRSSMiBSum": 75.3671875
+      }
+    },
+    {
+      "round": 4,
+      "framework": "before",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 750,
+        "fps": 60.00123602546213,
+        "frameP50Ms": 16.62,
+        "frameP99Ms": 17.705,
+        "goHeapResidentMiB": 6.171875,
+        "peakRSSMiB": 16.5234375,
+        "pssMiB": 13.8857421875,
+        "rssMiB": 16.5234375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 266.6666666666667,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.931249,
+        "totalCPUUsPerFrame": 1016.6666666666667,
+        "totalPSSMiB": 61.63671875,
+        "totalRSSMiBSum": 77.90625
+      }
+    },
+    {
+      "round": 4,
+      "framework": "fego",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 800,
+        "fps": 60.000822011261555,
+        "frameP50Ms": 16.576,
+        "frameP99Ms": 17.712,
+        "goHeapResidentMiB": 6.234375,
+        "peakRSSMiB": 16.5859375,
+        "pssMiB": 13.974609375,
+        "rssMiB": 16.5859375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 316.6666666666667,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.349788,
+        "totalCPUUsPerFrame": 1116.6666666666667,
+        "totalPSSMiB": 61.7275390625,
+        "totalRSSMiBSum": 77.96875
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.23046875,
+        "peakRSSMiB": 11.35546875,
+        "pssMiB": 8.7197265625,
+        "rssMiB": 11.35546875,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 5.738506,
+        "totalPSSMiB": 56.470703125,
+        "totalRSSMiBSum": 72.73828125
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "counter",
+      "metrics": {
+        "appCPUPercent": 0,
+        "goHeapResidentMiB": 2.44921875,
+        "peakRSSMiB": 11.46484375,
+        "pssMiB": 8.8251953125,
+        "rssMiB": 11.46484375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUPercent": 0,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 5.511962,
+        "totalPSSMiB": 56.576171875,
+        "totalRSSMiBSum": 72.84765625
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 683.3333333333334,
+        "fps": 60.00310816100274,
+        "frameP50Ms": 16.487,
+        "frameP99Ms": 17.683,
+        "goHeapResidentMiB": 5.7109375,
+        "peakRSSMiB": 16.16015625,
+        "pssMiB": 13.537109375,
+        "rssMiB": 16.16015625,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 250,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.831505,
+        "totalCPUUsPerFrame": 933.3333333333334,
+        "totalPSSMiB": 61.2900390625,
+        "totalRSSMiBSum": 77.54296875
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "list",
+      "metrics": {
+        "appCPUUsPerFrame": 683.3333333333334,
+        "fps": 59.99752210233717,
+        "frameP50Ms": 16.613,
+        "frameP99Ms": 17.716,
+        "goHeapResidentMiB": 5.82421875,
+        "peakRSSMiB": 16.125,
+        "pssMiB": 13.5048828125,
+        "rssMiB": 16.125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 250,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.764173,
+        "totalCPUUsPerFrame": 933.3333333333334,
+        "totalPSSMiB": 61.255859375,
+        "totalRSSMiBSum": 77.5078125
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2500,
+        "fps": 59.99802006533784,
+        "frameP50Ms": 16.423,
+        "frameP99Ms": 17.882,
+        "goHeapResidentMiB": 7.42578125,
+        "peakRSSMiB": 18.21484375,
+        "pssMiB": 15.591796875,
+        "rssMiB": 18.21484375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 450,
+        "serverPSSMiB": 47.7138671875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.872774,
+        "totalCPUUsPerFrame": 2950,
+        "totalPSSMiB": 63.3056640625,
+        "totalRSSMiBSum": 79.59765625
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "grid",
+      "metrics": {
+        "appCPUUsPerFrame": 2583.3333333333335,
+        "fps": 60.00150003750094,
+        "frameP50Ms": 16.479,
+        "frameP99Ms": 17.811,
+        "goHeapResidentMiB": 7.35546875,
+        "peakRSSMiB": 18.08984375,
+        "pssMiB": 15.4736328125,
+        "rssMiB": 18.08984375,
+        "serverBaselinePSSMiB": 47.7177734375,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.716796875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 9.381797,
+        "totalCPUUsPerFrame": 3050,
+        "totalPSSMiB": 63.1904296875,
+        "totalRSSMiBSum": 79.47265625
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 700,
+        "fps": 59.998656030104925,
+        "frameP50Ms": 16.501,
+        "frameP99Ms": 17.602,
+        "goHeapResidentMiB": 5.28515625,
+        "peakRSSMiB": 15.62890625,
+        "pssMiB": 13.01171875,
+        "rssMiB": 15.62890625,
+        "serverBaselinePSSMiB": 47.720703125,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 116.66666666666667,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.079276,
+        "totalCPUUsPerFrame": 816.6666666666666,
+        "totalPSSMiB": 60.7646484375,
+        "totalRSSMiBSum": 77.01171875
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "form",
+      "metrics": {
+        "appCPUUsPerFrame": 733.3333333333334,
+        "fps": 60.00083401159276,
+        "frameP50Ms": 16.531,
+        "frameP99Ms": 17.699,
+        "goHeapResidentMiB": 5.38671875,
+        "peakRSSMiB": 15.46484375,
+        "pssMiB": 12.8408203125,
+        "rssMiB": 15.46484375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 133.33333333333334,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.743823,
+        "totalCPUUsPerFrame": 866.6666666666667,
+        "totalPSSMiB": 60.59375,
+        "totalRSSMiBSum": 76.84765625
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1683.3333333333333,
+        "fps": 60.00146403572247,
+        "frameP50Ms": 16.562,
+        "frameP99Ms": 17.905,
+        "goHeapResidentMiB": 4.1171875,
+        "peakRSSMiB": 13.9921875,
+        "pssMiB": 11.369140625,
+        "rssMiB": 13.9921875,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 466.6666666666667,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 8.026884,
+        "totalCPUUsPerFrame": 2150,
+        "totalPSSMiB": 59.1220703125,
+        "totalRSSMiBSum": 75.375
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "image",
+      "metrics": {
+        "appCPUUsPerFrame": 1800,
+        "fps": 59.99781007993208,
+        "frameP50Ms": 16.623,
+        "frameP99Ms": 17.755,
+        "goHeapResidentMiB": 4.078125,
+        "peakRSSMiB": 13.828125,
+        "pssMiB": 11.232421875,
+        "rssMiB": 13.828125,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 483.3333333333333,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 7.879766,
+        "totalCPUUsPerFrame": 2283.3333333333335,
+        "totalPSSMiB": 58.9853515625,
+        "totalRSSMiBSum": 75.2109375
+      }
+    },
+    {
+      "round": 5,
+      "framework": "fego",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 766.6666666666666,
+        "fps": 60.00156004056105,
+        "frameP50Ms": 16.545,
+        "frameP99Ms": 17.685,
+        "goHeapResidentMiB": 6.5,
+        "peakRSSMiB": 16.9609375,
+        "pssMiB": 14.337890625,
+        "rssMiB": 16.9609375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 300,
+        "serverPSSMiB": 47.7529296875,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 11.010319,
+        "totalCPUUsPerFrame": 1066.6666666666665,
+        "totalPSSMiB": 62.0908203125,
+        "totalRSSMiBSum": 78.34375
+      }
+    },
+    {
+      "round": 5,
+      "framework": "before",
+      "scene": "richtext",
+      "metrics": {
+        "appCPUUsPerFrame": 783.3333333333334,
+        "fps": 60.003174167913485,
+        "frameP50Ms": 16.587,
+        "frameP99Ms": 17.685,
+        "goHeapResidentMiB": 6.2734375,
+        "peakRSSMiB": 16.55859375,
+        "pssMiB": 13.9384765625,
+        "rssMiB": 16.55859375,
+        "serverBaselinePSSMiB": 47.7587890625,
+        "serverBaselineRSSMiB": 61.3828125,
+        "serverCPUUsPerFrame": 283.3333333333333,
+        "serverPSSMiB": 47.7509765625,
+        "serverRSSMiB": 61.3828125,
+        "startupMs": 10.89482,
+        "totalCPUUsPerFrame": 1066.6666666666667,
+        "totalPSSMiB": 61.689453125,
+        "totalRSSMiBSum": 77.94140625
+      }
+    }
+  ],
+  "pixelConversion": {
+    "scope": "Isolated 800x600 RGBA to native BGRX conversion; 5 alternating rounds, ns/op not process CPU/RSS.",
+    "rounds": [
+      {
+        "round": 1,
+        "mode": "before",
+        "nsPerOp": 274915.0,
+        "megabytesPerSecond": 6983.98,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 1,
+        "mode": "after",
+        "nsPerOp": 139778.0,
+        "megabytesPerSecond": 13736.1,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 2,
+        "mode": "after",
+        "nsPerOp": 140043.0,
+        "megabytesPerSecond": 13710.09,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 2,
+        "mode": "before",
+        "nsPerOp": 275223.0,
+        "megabytesPerSecond": 6976.15,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 3,
+        "mode": "before",
+        "nsPerOp": 269324.0,
+        "megabytesPerSecond": 7128.97,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 3,
+        "mode": "after",
+        "nsPerOp": 140712.0,
+        "megabytesPerSecond": 13644.87,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 4,
+        "mode": "after",
+        "nsPerOp": 139668.0,
+        "megabytesPerSecond": 13746.91,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 4,
+        "mode": "before",
+        "nsPerOp": 270664.0,
+        "megabytesPerSecond": 7093.68,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 5,
+        "mode": "before",
+        "nsPerOp": 269223.0,
+        "megabytesPerSecond": 7131.62,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      },
+      {
+        "round": 5,
+        "mode": "after",
+        "nsPerOp": 142102.0,
+        "megabytesPerSecond": 13511.44,
+        "bytesPerOp": 0,
+        "allocsPerOp": 0
+      }
+    ],
+    "summary": {
+      "before": {
+        "nsPerOp": {
+          "median": 270664.0,
+          "min": 269223.0,
+          "max": 275223.0
+        },
+        "megabytesPerSecond": {
+          "median": 7093.68,
+          "min": 6976.15,
+          "max": 7131.62
+        },
+        "bytesPerOp": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "allocsPerOp": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        }
+      },
+      "after": {
+        "nsPerOp": {
+          "median": 140043.0,
+          "min": 139668.0,
+          "max": 142102.0
+        },
+        "megabytesPerSecond": {
+          "median": 13710.09,
+          "min": 13511.44,
+          "max": 13746.91
+        },
+        "bytesPerOp": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        },
+        "allocsPerOp": {
+          "median": 0,
+          "min": 0,
+          "max": 0
+        }
+      }
+    }
+  },
+  "closedTextDiagnostic": {
+    "scope": "16 retained, closed text systems; Go HeapAlloc delta after forced GC. Diagnostic only, not RSS/PSS or normal runtime behavior. System fonts used from this Linux workstation.",
+    "samples": [
+      {
+        "round": 1,
+        "mode": "before",
+        "retainedHeapBytes": 12467360
+      },
+      {
+        "round": 1,
+        "mode": "candidate",
+        "retainedHeapBytes": 69832
+      },
+      {
+        "round": 2,
+        "mode": "candidate",
+        "retainedHeapBytes": 69496
+      },
+      {
+        "round": 2,
+        "mode": "before",
+        "retainedHeapBytes": 12467376
+      },
+      {
+        "round": 3,
+        "mode": "before",
+        "retainedHeapBytes": 12472808
+      },
+      {
+        "round": 3,
+        "mode": "candidate",
+        "retainedHeapBytes": 64176
+      }
+    ],
+    "summary": {
+      "before": {
+        "median": 12467376,
+        "min": 12467360,
+        "max": 12472808
+      },
+      "candidate": {
+        "median": 69496,
+        "min": 64176,
+        "max": 69832
+      }
+    },
+    "textSourceSHA256": {
+      "before": "3a4df85d55cf43fe34ddfe4a242de7360023bddd874a01544b17a2c7225f6a47",
+      "candidate": "49aa466429fdfbe6d6e1ed365407dc2711546cb78345a0cfeb61d1581f69750d"
+    }
+  },
+  "powerProfileRestoration": {
+    "before": "power-saver",
+    "hold": "performance",
+    "mechanism": "powerprofilesctl launch; release when benchmark process exits",
+    "after": "power-saver",
+    "restored": true,
+    "automaticReleaseEndedAs": "balanced",
+    "manualRestoration": true
+  },
+  "limits": [
+    "Software Xvfb display; not hardware compositor or physical display latency",
+    "Registry and D-Bus CPU are outside the Xvfb process group",
+    "Forced-GC closed-object diagnostic is not active-window RSS/PSS",
+    "Windows/macOS runtime and human IME/screen-reader acceptance remain unverified",
+    "Small native differences may fall within shared-host variation"
+  ]
+}

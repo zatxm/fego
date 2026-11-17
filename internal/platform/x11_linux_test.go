@@ -1,0 +1,444 @@
+//go:build linux && (amd64 || arm64)
+
+package platform
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"image"
+	"image/color"
+	"math"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+	"unsafe"
+
+	"github.com/ebitengine/purego"
+)
+
+func TestX11ABI(t *testing.T) {
+	if unsafe.Sizeof(xEvent{}) != 192 || unsafe.Sizeof(xAny{}) != 40 || unsafe.Sizeof(xKeyEvent{}) != 96 || unsafe.Sizeof(xConfigureEvent{}) != 88 || unsafe.Sizeof(xImage{}) != 136 {
+		t.Fatal("Xlib ABI struct sizes do not match 64-bit X11")
+	}
+	if unsafe.Offsetof(xKeyEvent{}.State) != 80 || unsafe.Offsetof(xClientEvent{}.Data) != 56 || unsafe.Offsetof(xImage{}.Red) != 56 || unsafe.Offsetof(xImage{}.BytesPerLine) != 44 {
+		t.Fatal("Xlib ABI field offsets do not match 64-bit X11")
+	}
+}
+
+func TestX11ImageBounds(t *testing.T) {
+	for _, size := range [][2]int{{0, 1}, {1, 0}, {-1, 1}, {32768, 1}, {32767, 32767}, {math.MaxInt, 2}} {
+		if xDimensions(size[0], size[1]) {
+			t.Errorf("accepted dimensions %v", size)
+		}
+	}
+	if !xDimensions(7680, 4320) {
+		t.Fatal("8K window rejected")
+	}
+	for _, src := range []*image.RGBA{
+		{Rect: image.Rect(0, 0, 2, 3), Stride: math.MaxInt, Pix: make([]byte, 8)},
+		{Rect: image.Rect(0, 0, 2, 2), Stride: 8, Pix: make([]byte, 15)},
+		{Rect: image.Rect(0, 0, 2, 2), Stride: 7, Pix: make([]byte, 16)},
+	} {
+		if xValidRGBA(src) {
+			t.Fatal("accepted invalid/overflowing pixel storage")
+		}
+	}
+	if !xValidRGBA(image.NewRGBA(image.Rect(3, 4, 9, 10))) {
+		t.Fatal("valid offset image rejected")
+	}
+}
+
+func TestX11InitialDeviceSize(t *testing.T) {
+	if os.Getenv("FEGO_X11_TEST") != "1" {
+		t.Skip("set FEGO_X11_TEST=1 on a dedicated X display")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	t.Setenv("GDK_SCALE", "1.5")
+	native, err := New(func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := native.(*xBackend)
+	defer b.release()
+	var initial Event
+	_, err = b.Open(Options{Title: "Initial device size", Width: 320, Height: 200}, func(event Event) { initial = event })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Kind != Resize || initial.Width != 480 || initial.Height != 300 || initial.Scale != 1.5 {
+		t.Fatal("first frame would use logical instead of device dimensions", initial)
+	}
+}
+
+func TestX11DamageCopy(t *testing.T) {
+	src := image.NewRGBA(image.Rect(10, 20, 13, 23))
+	src.SetRGBA(11, 21, color.RGBA{R: 10, G: 20, B: 30, A: 255})
+	for _, big := range []bool{false, true} {
+		dst := bytes.Repeat([]byte{77}, 3*16)
+		xCopyPixels(dst, 16, src, image.Rect(11, 21, 12, 22), big)
+		want := []byte{30, 20, 10, 255}
+		if big {
+			want = []byte{255, 10, 20, 30}
+		}
+		if !bytes.Equal(dst[20:24], want) {
+			t.Fatalf("pixel=%v want %v", dst[20:24], want)
+		}
+		for i, b := range dst {
+			if (i < 20 || i >= 24) && b != 77 {
+				t.Fatalf("damage copy changed byte %d outside damage", i)
+			}
+		}
+	}
+}
+
+func TestX11ScaleAndKeys(t *testing.T) {
+	for _, tc := range []struct {
+		resource, override string
+		want               float32
+	}{{"Xft.dpi:\t144", "", 1.5}, {"Xft.dpi: NaN", "", 1}, {"Xft.dpi: 96", "2", 2}, {"", "NaN", 1}, {"Xft.dpi: 100000", "", 1}} {
+		if got := xScale(tc.resource, tc.override); got != tc.want {
+			t.Errorf("scale %v want %v", got, tc.want)
+		}
+	}
+	for key, want := range map[uintptr]string{0xff09: "Tab", 0xff51: "ArrowLeft", 0xffc0: "F3", 'A': "a", 0x01004e2d: "中", 0xffe5: ""} {
+		if got := xKeyName(key); got != want {
+			t.Errorf("key %#x = %q want %q", key, got, want)
+		}
+	}
+}
+
+// FEGO_X11_TEST=1 DISPLAY=:... go test ./internal/platform -run TestX11Native -v
+func TestX11Native(t *testing.T) {
+	if os.Getenv("FEGO_X11_TEST") != "1" {
+		t.Skip("set FEGO_X11_TEST=1 on a dedicated X display")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	var b *xBackend
+	var w *xWindow
+	ready := make(chan struct{}, 1)
+	jobs := make(chan func(), 4)
+	native, err := New(func() {
+		for {
+			select {
+			case job := <-jobs:
+				job()
+			default:
+				return
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b = native.(*xBackend)
+	defer b.release()
+	events := map[EventKind]int{}
+	window, err := b.Open(Options{Title: "Fego native test", Width: 160, Height: 100}, func(e Event) {
+		events[e.Kind]++
+		if e.Kind == Paint {
+			select {
+			case ready <- struct{}{}:
+			default:
+			}
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w = window.(*xWindow)
+	lib, err := purego.Dlopen("libX11.so.6", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var syncX func(uintptr, int32) int32
+	var getImage func(uintptr, uintptr, int32, int32, uint32, uint32, uintptr, int32) *xImage
+	var getPixel func(*xImage, int32, int32) uintptr
+	var keycode func(uintptr, uintptr) uint8
+	var focus func(uintptr, uintptr, int32, uintptr) int32
+	purego.RegisterLibFunc(&syncX, lib, "XSync")
+	purego.RegisterLibFunc(&getImage, lib, "XGetImage")
+	purego.RegisterLibFunc(&getPixel, lib, "XGetPixel")
+	purego.RegisterLibFunc(&keycode, lib, "XKeysymToKeycode")
+	purego.RegisterLibFunc(&focus, lib, "XSetInputFocus")
+	go func() {
+		<-ready
+		jobs <- func() {
+			img := image.NewRGBA(image.Rect(0, 0, 160, 100))
+			for y := 0; y < 100; y++ {
+				for x := 0; x < 160; x++ {
+					img.SetRGBA(x, y, color.RGBA{R: 200, G: 30, B: 40, A: 255})
+				}
+			}
+			w.Present(img, []image.Rectangle{img.Bounds()})
+			if n := testing.AllocsPerRun(25, func() { w.putImage(0, 0, 1, 1) }); n != 0 {
+				t.Errorf("XPutImage argument conversion allocated %v times", n)
+			}
+			damage := []image.Rectangle{img.Bounds()}
+			if n := testing.AllocsPerRun(25, func() { w.Present(img, damage) }); n != 0 {
+				t.Errorf("steady native Present allocated %v times", n)
+			}
+			fullCapacity := w.imageBytes
+			img.SetRGBA(3, 4, color.RGBA{R: 1, G: 2, B: 240, A: 255})
+			img.SetRGBA(4, 4, color.RGBA{R: 255, A: 255})
+			w.Present(img, []image.Rectangle{image.Rect(3, 4, 4, 5)})
+			for i := 0; i < 7; i++ {
+				w.Present(img, []image.Rectangle{image.Rect(3, 4, 4, 5)})
+			}
+			if w.imageBytes >= fullCapacity {
+				t.Error("partial upload retained full-window conversion buffer")
+			}
+			syncX(b.display, 0)
+			actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("XGetImage failed")
+			} else {
+				if got := getPixel(actual, 3, 4) & 0xffffff; got != 0x0102f0 {
+					t.Errorf("damaged pixel=%#x", got)
+				}
+				if got := getPixel(actual, 4, 4) & 0xffffff; got != 0xc81e28 {
+					t.Errorf("pixel outside damage=%#x", got)
+				}
+				xl.destroyImage(actual)
+			}
+			if !w.ScrollPixels(img.Rect, image.Pt(0, 8)) {
+				t.Error("native scroll copy rejected")
+			}
+			top := image.Rect(0, 0, 160, 8)
+			for y := 0; y < 8; y++ {
+				for x := 0; x < 160; x++ {
+					img.SetRGBA(x, y, color.RGBA{G: 200, A: 255})
+				}
+			}
+			w.Present(img, []image.Rectangle{top})
+			syncX(b.display, 0)
+			actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("scroll readback failed")
+			} else {
+				if got := getPixel(actual, 3, 12) & 0xffffff; got != 0x0102f0 {
+					t.Errorf("copied scroll pixel=%#x", got)
+				}
+				if got := getPixel(actual, 3, 4) & 0xffffff; got != 0x00c800 {
+					t.Errorf("exposed strip pixel=%#x", got)
+				}
+				xl.destroyImage(actual)
+			}
+			before := events[Paint]
+			var expose xEvent
+			*(*xAny)(unsafe.Pointer(&expose)) = xAny{Kind: xGraphicsExpose, Display: b.display, Window: w.id}
+			b.event(&expose)
+			if events[Paint] != before+1 {
+				t.Error("lost scroll source did not request repaint")
+			}
+			// A cropped image with a nonzero origin still targets client coordinates.
+			parent := image.NewRGBA(image.Rect(10, 20, 174, 124))
+			cropped := parent.SubImage(image.Rect(12, 22, 172, 122)).(*image.RGBA)
+			cropped.SetRGBA(30, 40, color.RGBA{R: 45, G: 67, B: 89, A: 255})
+			w.Present(cropped, []image.Rectangle{image.Rect(30, 40, 31, 41)})
+			syncX(b.display, 0)
+			actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("cropped upload readback failed")
+			} else {
+				if got := getPixel(actual, 18, 18) & 0xffffff; got != 0x2d4359 {
+					t.Errorf("cropped pixel=%#x", got)
+				}
+				xl.destroyImage(actual)
+			}
+			w.Present(img, []image.Rectangle{img.Rect})
+			if w.imageBytes < 160*100*4 {
+				t.Error("full repaint failed to regrow upload buffer")
+			}
+			tall, wide := image.Rect(20, 10, 23, 90), image.Rect(10, 30, 150, 32)
+			for y := tall.Min.Y; y < tall.Max.Y; y++ {
+				for x := tall.Min.X; x < tall.Max.X; x++ {
+					img.SetRGBA(x, y, color.RGBA{R: 11, G: 22, B: 33, A: 255})
+				}
+			}
+			for y := wide.Min.Y; y < wide.Max.Y; y++ {
+				for x := wide.Min.X; x < wide.Max.X; x++ {
+					img.SetRGBA(x, y, color.RGBA{R: 44, G: 55, B: 66, A: 255})
+				}
+			}
+			w.Present(img, []image.Rectangle{tall, wide})
+			for i := 0; i < 7; i++ {
+				w.Present(img, []image.Rectangle{tall, wide})
+			}
+			if w.imageBytes != 4096 {
+				t.Error("mixed tile orientations expanded staging buffer", w.imageBytes)
+			}
+			syncX(b.display, 0)
+			actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("mixed tile readback failed")
+			} else {
+				for point, want := range map[image.Point]uintptr{image.Pt(21, 60): 0x0b1621, image.Pt(100, 31): 0x2c3742, image.Pt(159, 99): 0xc81e28} {
+					if got := getPixel(actual, int32(point.X), int32(point.Y)) & 0xffffff; got != want {
+						t.Errorf("tile %v=%#x want %#x", point, got, want)
+					}
+				}
+				xl.destroyImage(actual)
+			}
+			largeParent := image.NewRGBA(image.Rect(7, 11, 16014, 115))
+			large := largeParent.SubImage(image.Rect(9, 13, 16010, 113)).(*image.RGBA)
+			for y := 0; y < large.Rect.Dy(); y++ {
+				for x := 0; x < large.Rect.Dx(); x++ {
+					i := large.PixOffset(large.Rect.Min.X+x, large.Rect.Min.Y+y)
+					large.Pix[i], large.Pix[i+1], large.Pix[i+2], large.Pix[i+3] = uint8(y), uint8(x), 89, 255
+				}
+			}
+			w.Present(large, []image.Rectangle{large.Rect.Inset(-5)})
+			if w.imageBytes > xUploadBytes {
+				t.Error("upload conversion buffer exceeded its budget", w.imageBytes)
+			}
+			syncX(b.display, 0)
+			actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("split upload readback failed")
+			} else {
+				for _, y := range []int32{0, 7, 8, 15, 16, 31, 32, 79, 80, 99} {
+					want := uintptr(y)<<16 | 12<<8 | 89
+					if got := getPixel(actual, 12, y) & 0xffffff; got != want {
+						t.Errorf("split upload boundary %d: %#x want %#x", y, got, want)
+					}
+				}
+				xl.destroyImage(actual)
+			}
+			w.SetClipboard("中文 clipboard 🙂")
+			if got := w.Clipboard(); got != "中文 clipboard 🙂" {
+				t.Errorf("clipboard=%q", got)
+			}
+			w.TextInput(true, image.Rect(10, 10, 11, 28))
+			focus(b.display, w.id, 1, 0)
+			for _, kind := range []int32{xButtonPress, xButtonRelease, xMotion, xKeyPress, xKeyRelease} {
+				var raw xEvent
+				e := (*xKeyEvent)(unsafe.Pointer(&raw))
+				*e = xKeyEvent{xAny: xAny{Kind: kind, Display: b.display, Window: w.id}, Root: b.root, X: 20, Y: 30, Code: 1, SameScreen: 1}
+				mask := int64(1 << 6)
+				if kind == xButtonPress {
+					mask = 4
+				}
+				if kind == xButtonRelease {
+					mask = 8
+				}
+				if kind == xKeyPress || kind == xKeyRelease {
+					e.Code = uint32(keycode(b.display, 'q'))
+					mask = 1
+					if kind == xKeyRelease {
+						mask = 2
+					}
+				}
+				xl.sendEvent(b.display, w.id, 0, mask, &raw)
+			}
+			w.SetCursor("text")
+			w.SetSize(180, 120)
+			syncX(b.display, 0)
+			for xl.pending(b.display) > 0 {
+				var e xEvent
+				xl.nextEvent(b.display, &e)
+				b.event(&e)
+			}
+			if w.width != 180 || w.height != 120 {
+				t.Errorf("native resize=%dx%d", w.width, w.height)
+			}
+			w.Close()
+			w.Close()
+			b.Quit()
+		}
+		b.Wake()
+	}()
+	if err := b.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if events[Paint] == 0 || events[Resize] == 0 {
+		t.Fatalf("missing native paint/resize events: %v", events)
+	}
+	for _, kind := range []EventKind{PointerDown, PointerUp, PointerMove, KeyDown, KeyUp, Text, Focus} {
+		if events[kind] == 0 {
+			t.Errorf("native event %d not delivered: %v", kind, events)
+		}
+	}
+	if len(b.windows) != 0 || w.img != nil || w.imageBytes != 0 || w.gc != 0 || w.ic != 0 || w.access != nil {
+		t.Fatal("native resources retained after close")
+	}
+	b.Wake()
+}
+
+func TestX11ClipboardInterop(t *testing.T) {
+	path := os.Getenv("FEGO_XCLIP")
+	if os.Getenv("FEGO_X11_TEST") != "1" || path == "" {
+		t.Skip("set FEGO_X11_TEST=1 and FEGO_XCLIP on a dedicated X display")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	jobs := make(chan func(), 1)
+	native, err := New(func() {
+		select {
+		case f := <-jobs:
+			f()
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := native.(*xBackend)
+	defer b.release()
+	window, err := b.Open(Options{Title: "Fego clipboard test", Width: 64, Height: 64}, func(Event) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := window.(*xWindow)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	text := strings.Repeat("中文 clipboard 🙂\n", 30000)
+	owner := exec.CommandContext(ctx, path, "-selection", "clipboard", "-in", "-loops", "1", "-verbose")
+	owner.Stdin = strings.NewReader(text)
+	stderr, err := owner.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Process.Kill()
+	scanner := bufio.NewScanner(stderr)
+	ready := false
+	for scanner.Scan() {
+		if strings.Contains(scanner.Text(), "Waiting for") {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		t.Fatal("xclip did not claim the clipboard")
+	}
+	if got := w.Clipboard(); got != text {
+		t.Fatalf("external INCR clipboard: got %d bytes, want %d", len(got), len(text))
+	}
+	if err := owner.Wait(); err != nil {
+		t.Fatal(err)
+	}
+	w.SetClipboard(text)
+	go func() {
+		got, err := exec.CommandContext(ctx, path, "-selection", "clipboard", "-out").Output()
+		jobs <- func() {
+			if err != nil {
+				t.Error(err)
+			} else if string(got) != text {
+				t.Errorf("outgoing clipboard: got %d bytes, want %d", len(got), len(text))
+			}
+			b.Quit()
+		}
+		b.Wake()
+	}()
+	if err := b.Run(); err != nil {
+		t.Fatal(err)
+	}
+}

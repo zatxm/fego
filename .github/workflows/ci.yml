@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOTOOLCHAIN: local
+  GOMAXPROCS: '4'
+
+jobs:
+  test:
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - run: go test -count=1 ./...
+        env:
+          CGO_ENABLED: '0'
+      - run: go vet ./...
+        env:
+          CGO_ENABLED: '0'
+      - name: Race checks
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 ./...
+      - name: Cross-build all supported targets
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for target in linux/amd64 linux/arm64 windows/amd64 windows/arm64 darwin/amd64 darwin/arm64; do
+            export GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0
+            go build ./...
+            go test -c -o "$RUNNER_TEMP/platform-${GOOS}-${GOARCH}.test" ./internal/platform
+          done
+
+  linux-native:
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb xclip libx11-6 libatspi2.0-0 at-spi2-core dbus-x11 fonts-noto-core
+      - name: Native X11 and AT-SPI checks
+        run: xvfb-run -a -s '-screen 0 1280x960x24' go test -count=1 -timeout=2m ./internal/platform
+        env:
+          CGO_ENABLED: '0'
+          FEGO_X11_TEST: '1'
+          FEGO_ATSPI_TEST: '1'
+          FEGO_XCLIP: /usr/bin/xclip
+      - name: Native race checks
+        run: xvfb-run -a -s '-screen 0 1280x960x24' go test -race -count=1 -timeout=2m ./internal/platform
+        env:
+          FEGO_X11_TEST: '1'
+          FEGO_ATSPI_TEST: '1'
+          FEGO_XCLIP: /usr/bin/xclip

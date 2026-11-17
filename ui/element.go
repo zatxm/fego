@@ -1,0 +1,529 @@
+// Package ui implements retained desktop controls, layout and rendering in Go.
+// Build a tree once; setters and event callbacks update only the affected regions.
+package ui
+
+import (
+	"image"
+	"image/color"
+	"math"
+	"strings"
+	"sync/atomic"
+	"unicode/utf8"
+)
+
+type Color = color.RGBA
+
+func RGB(r, g, b uint8) Color     { return Color{R: r, G: g, B: b, A: 255} }
+func RGBA(r, g, b, a uint8) Color { return Color{R: r, G: g, B: b, A: a} }
+
+type Theme struct {
+	Background, Surface, Raised, Text, Muted, Border, Accent, AccentText, Danger Color
+	FontSize                                                                     float32
+}
+
+var Light = Theme{
+	Background: RGB(247, 249, 252), Surface: RGB(255, 255, 255), Raised: RGB(241, 245, 249),
+	Text: RGB(24, 34, 52), Muted: RGB(100, 116, 139), Border: RGB(219, 226, 236),
+	Accent: RGB(65, 99, 235), AccentText: RGB(255, 255, 255), Danger: RGB(222, 69, 80), FontSize: 14,
+}
+var Dark = Theme{
+	Background: RGB(15, 23, 42), Surface: RGB(24, 34, 52), Raised: RGB(33, 46, 65),
+	Text: RGB(235, 240, 249), Muted: RGB(158, 174, 196), Border: RGB(51, 65, 85),
+	Accent: RGB(129, 153, 255), AccentText: RGB(15, 23, 42), Danger: RGB(255, 117, 125), FontSize: 14,
+}
+
+type Align uint8
+
+const (
+	Start Align = iota
+	Center
+	End
+	Stretch
+	SpaceBetween
+)
+
+type Rect struct{ X, Y, W, H float32 }
+
+func (r Rect) contains(x, y float32) bool { return x >= r.X && y >= r.Y && x < r.X+r.W && y < r.Y+r.H }
+func (r Rect) pixels(scale float32) image.Rectangle {
+	return image.Rect(int(math.Floor(float64(r.X*scale))), int(math.Floor(float64(r.Y*scale))), int(math.Ceil(float64((r.X+r.W)*scale))), int(math.Ceil(float64((r.Y+r.H)*scale))))
+}
+func (r Rect) intersect(o Rect) Rect {
+	x, y := max(r.X, o.X), max(r.Y, o.Y)
+	return Rect{x, y, max(0, min(r.X+r.W, o.X+o.W)-x), max(0, min(r.Y+r.H, o.Y+o.H)-y)}
+}
+
+type kind uint8
+
+const (
+	kBox kind = iota
+	kText
+	kButton
+	kInput
+	kCheck
+	kSwitch
+	kRadio
+	kSlider
+	kProgress
+	kSelect
+	kSeparator
+	kList
+	kTable
+	kTree
+	kImage
+	kCanvas
+	kEditor
+	kRichText
+)
+
+type direction uint8
+
+const (
+	vertical direction = iota
+	horizontal
+	grid
+)
+
+type style struct {
+	w, h, minW, minH, maxW, maxH, grow                        float32
+	padding                                                   [4]float32
+	gap, radius, font                                         float32
+	align, justify                                            Align
+	bg, fg, border                                            Color
+	bgSet, fgSet, borderSet, bold, fillW, fillH, shadow, clip bool
+	dir                                                       direction
+	columns                                                   int
+}
+
+// Element is owned by one view. Mutate it on the UI thread; use Window.Update
+// when data arrives from a goroutine. Children cannot be shared between parents.
+type Element struct {
+	id                                                           uint64
+	kind                                                         kind
+	layoutY                                                      float32
+	style                                                        style
+	parent                                                       *Element
+	children                                                     []*Element
+	view                                                         *view
+	rect, clip                                                   Rect
+	text, placeholder, label                                     string
+	disabled, hidden, primary, checked, multiline, password, tab bool
+	value, minimum, maximum                                      float64
+	selected                                                     int
+	options                                                      []string
+	count                                                        int
+	rowText                                                      func(int) string
+	columns                                                      []ColumnDef
+	rows                                                         [][]string
+	order                                                        []int
+	tree                                                         []*TreeNode
+	visibleTree                                                  []treeRow
+	expanded                                                     map[*TreeNode]bool
+	spans                                                        []Span
+	bitmap                                                       image.Image
+	draw                                                         func(*Painter)
+	onClick                                                      func()
+	onChange                                                     func(string)
+	onToggle                                                     func(bool)
+	onValue                                                      func(float64)
+	onSelect                                                     func(int)
+	onLink                                                       func(string)
+	scroll                                                       float32
+	scrollX, contentH                                            float32
+	scrollable                                                   bool
+	cursor, anchor                                               int
+	undo                                                         []string
+	undoBytes                                                    int
+}
+
+var elementIDs atomic.Uint64
+
+func element(k kind) *Element {
+	return &Element{id: elementIDs.Add(1) << 32, kind: k, selected: -1, style: style{radius: 10, align: Stretch}}
+}
+func Box(children ...*Element) *Element    { return element(kBox).Children(children...) }
+func Column(children ...*Element) *Element { return Box(children...).Gap(12) }
+func Row(children ...*Element) *Element {
+	e := Box(children...).Gap(10)
+	e.style.dir = horizontal
+	e.style.align = Center
+	return e
+}
+func Grid(columns int, children ...*Element) *Element {
+	if columns < 1 {
+		panic("ui: grid needs at least one column")
+	}
+	e := Box(children...).Gap(12)
+	e.style.dir = grid
+	e.style.columns = columns
+	return e
+}
+func Card(children ...*Element) *Element {
+	e := Column(children...).Padding(20).Radius(14)
+	e.style.shadow = true
+	e.style.borderSet = true
+	return e
+}
+
+// ScrollView clips one retained content tree and scrolls it vertically.
+func ScrollView(content *Element) *Element {
+	e := Box(content).Clip()
+	e.scrollable = true
+	return e
+}
+func Text(s string) *Element { e := element(kText); e.text = s; return e }
+func Button(s string, click func()) *Element {
+	e := element(kButton)
+	e.text = s
+	e.onClick = click
+	return e
+}
+func PrimaryButton(s string, click func()) *Element {
+	e := Button(s, click)
+	e.primary = true
+	return e
+}
+func TextInput(s string) *Element {
+	e := element(kInput)
+	e.text = s
+	e.cursor = utf8.RuneCountInString(s)
+	e.anchor = e.cursor
+	return e
+}
+func TextArea(s string) *Element   { e := TextInput(s); e.multiline = true; return e.Height(120) }
+func CodeEditor(s string) *Element { e := TextArea(s); e.kind = kEditor; return e.Height(240) }
+func Checkbox(s string, checked bool) *Element {
+	e := element(kCheck)
+	e.text = s
+	e.checked = checked
+	return e
+}
+func Switch(s string, checked bool) *Element { e := Checkbox(s, checked); e.kind = kSwitch; return e }
+func Radio(s string, checked bool) *Element  { e := Checkbox(s, checked); e.kind = kRadio; return e }
+func Slider(value, low, high float64) *Element {
+	if math.IsNaN(low) || math.IsNaN(high) || math.IsInf(low, 0) || math.IsInf(high, 0) || low >= high {
+		panic("ui: invalid slider range")
+	}
+	e := element(kSlider)
+	e.minimum, e.maximum = low, high
+	return e.SetValue(value)
+}
+func Progress(value float64) *Element {
+	e := element(kProgress)
+	e.maximum = 1
+	return e.SetValue(value)
+}
+func Select(options []string, selected int) *Element {
+	e := element(kSelect)
+	e.options = append([]string(nil), options...)
+	e.SetSelected(selected)
+	return e
+}
+func Separator() *Element { return element(kSeparator).Height(1) }
+func List(count int, text func(int) string) *Element {
+	if count < 0 || text == nil {
+		panic("ui: invalid list source")
+	}
+	e := element(kList)
+	e.count = count
+	e.rowText = text
+	return e.Height(240)
+}
+
+type ColumnDef struct {
+	Title string
+	Width float32
+}
+
+func Table(columns []ColumnDef, rows [][]string) *Element {
+	e := element(kTable)
+	e.columns = append([]ColumnDef(nil), columns...)
+	e.rows = rows
+	return e.Height(260)
+}
+
+type TreeNode struct {
+	Label    string
+	Children []*TreeNode
+}
+type treeRow struct {
+	node  *TreeNode
+	depth int
+}
+
+func Tree(nodes ...*TreeNode) *Element {
+	e := element(kTree)
+	e.tree = nodes
+	e.expanded = map[*TreeNode]bool{}
+	e.rebuildTree()
+	return e.Height(240)
+}
+func Image(img image.Image) *Element { e := element(kImage); e.bitmap = img; return e }
+func Canvas(width, height float32, draw func(*Painter)) *Element {
+	e := element(kCanvas)
+	e.draw = draw
+	return e.Size(width, height)
+}
+
+type Span struct {
+	Text  string
+	Color Color
+	Bold  bool
+	Link  string
+}
+
+func RichText(spans ...Span) *Element {
+	e := element(kRichText)
+	e.spans = append([]Span(nil), spans...)
+	// Accessibility reuses the immutable plain text instead of joining spans every frame.
+	var text strings.Builder
+	for _, span := range spans {
+		text.WriteString(span.Text)
+	}
+	e.text = text.String()
+	return e
+}
+
+func (e *Element) Children(children ...*Element) *Element {
+	retained := make(map[*Element]bool, len(children))
+	for _, c := range children {
+		if c == nil || c == e || retained[c] || (c.parent != nil && c.parent != e) || (c.view != nil && c.parent != e) {
+			panic("ui: child must have one parent")
+		}
+		for p := e; p != nil; p = p.parent {
+			if p == c {
+				panic("ui: cyclic widget tree")
+			}
+		}
+		retained[c] = true
+	}
+	for _, c := range e.children {
+		if retained[c] {
+			continue
+		}
+		if e.view != nil {
+			e.view.forget(c)
+		}
+		c.parent = nil
+		c.attach(nil)
+	}
+	e.children = append([]*Element(nil), children...)
+	for _, c := range children {
+		if c.parent == e {
+			continue
+		}
+		c.parent = e
+		c.attach(e.view)
+	}
+	e.touch(true)
+	return e
+}
+func (e *Element) Append(children ...*Element) *Element {
+	all := append(append([]*Element(nil), e.children...), children...)
+	return e.Children(all...)
+}
+func (e *Element) attach(v *view) {
+	e.view = v
+	for _, c := range e.children {
+		c.attach(v)
+	}
+}
+func (e *Element) touch(layout bool) {
+	if e.view != nil {
+		e.view.invalidate(e, layout)
+	}
+}
+func (e *Element) SetText(s string) *Element {
+	if e.text != s {
+		variable := e.kind == kText || e.kind == kButton || e.kind == kCheck || e.kind == kSwitch || e.kind == kRadio
+		layout := variable && e.style.w == 0
+		if variable && e.style.h == 0 && e.view != nil {
+			_, before := e.view.text.Measure(e.text, e.view.font(e), e.style.bold)
+			_, after := e.view.text.Measure(s, e.view.font(e), e.style.bold)
+			layout = layout || before != after
+		}
+		e.text = s
+		n := utf8.RuneCountInString(s)
+		e.cursor = min(e.cursor, n)
+		e.anchor = min(e.anchor, n)
+		if e.kind == kInput || e.kind == kEditor {
+			e.undo = nil
+			e.undoBytes = 0
+			e.scroll = min(e.scroll, e.maxScroll())
+			e.scrollX = 0
+		}
+		e.touch(layout)
+	}
+	return e
+}
+func (e *Element) Text() string { return e.text }
+func (e *Element) SetChecked(v bool) *Element {
+	if e.checked != v {
+		e.checked = v
+		e.touch(false)
+	}
+	return e
+}
+func (e *Element) Checked() bool { return e.checked }
+func (e *Element) SetValue(v float64) *Element {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		panic("ui: value must be finite")
+	}
+	v = max(e.minimum, min(e.maximum, v))
+	if e.value != v {
+		e.value = v
+		e.touch(false)
+	}
+	return e
+}
+func (e *Element) Value() float64 { return e.value }
+func (e *Element) SetSelected(i int) *Element {
+	if e.kind == kSelect && (i < -1 || i >= len(e.options)) {
+		panic("ui: selection outside options")
+	}
+	if e.selected != i {
+		e.selected = i
+		e.touch(false)
+	}
+	return e
+}
+func (e *Element) Selected() int { return e.selected }
+func (e *Element) SetRows(rows [][]string) *Element {
+	e.rows = rows
+	e.order = nil
+	e.selected = -1
+	e.scroll = 0
+	e.touch(false)
+	return e
+}
+func (e *Element) SetCount(n int) *Element {
+	if n < 0 {
+		panic("ui: negative list length")
+	}
+	e.count = n
+	e.selected = min(e.selected, n-1)
+	e.scroll = min(e.scroll, e.maxScroll())
+	e.touch(false)
+	return e
+}
+func (e *Element) Width(w float32) *Element     { e.style.w = w; e.touch(true); return e }
+func (e *Element) Height(h float32) *Element    { e.style.h = h; e.touch(true); return e }
+func (e *Element) Size(w, h float32) *Element   { e.style.w, e.style.h = w, h; e.touch(true); return e }
+func (e *Element) MinWidth(w float32) *Element  { e.style.minW = w; e.touch(true); return e }
+func (e *Element) MinHeight(h float32) *Element { e.style.minH = h; e.touch(true); return e }
+func (e *Element) MaxWidth(w float32) *Element  { e.style.maxW = w; e.touch(true); return e }
+func (e *Element) MaxHeight(h float32) *Element { e.style.maxH = h; e.touch(true); return e }
+func (e *Element) Grow(weight float32) *Element { e.style.grow = weight; e.touch(true); return e }
+func (e *Element) Fill() *Element {
+	e.style.fillW, e.style.fillH = true, true
+	e.touch(true)
+	return e
+}
+func (e *Element) FillWidth() *Element { e.style.fillW = true; e.touch(true); return e }
+func (e *Element) FillHeight() *Element {
+	e.style.fillH = true
+	e.touch(true)
+	return e
+}
+func (e *Element) Gap(gap float32) *Element { e.style.gap = gap; e.touch(true); return e }
+func (e *Element) Padding(values ...float32) *Element {
+	switch len(values) {
+	case 1:
+		e.style.padding = [4]float32{values[0], values[0], values[0], values[0]}
+	case 2:
+		e.style.padding = [4]float32{values[0], values[1], values[0], values[1]}
+	case 4:
+		copy(e.style.padding[:], values)
+	default:
+		panic("ui: Padding takes 1, 2 or 4 values")
+	}
+	e.touch(true)
+	return e
+}
+func (e *Element) Radius(radius float32) *Element { e.style.radius = radius; e.touch(false); return e }
+func (e *Element) Background(c Color) *Element {
+	e.style.bg, e.style.bgSet = c, true
+	e.touch(false)
+	return e
+}
+func (e *Element) TextColor(c Color) *Element {
+	e.style.fg, e.style.fgSet = c, true
+	e.touch(false)
+	return e
+}
+func (e *Element) Border(c Color) *Element {
+	e.style.border, e.style.borderSet = c, true
+	e.touch(false)
+	return e
+}
+func (e *Element) FontSize(size float32) *Element  { e.style.font = size; e.touch(true); return e }
+func (e *Element) Bold() *Element                  { e.style.bold = true; e.touch(true); return e }
+func (e *Element) AlignItems(align Align) *Element { e.style.align = align; e.touch(true); return e }
+func (e *Element) Justify(align Align) *Element    { e.style.justify = align; e.touch(true); return e }
+func (e *Element) Center() *Element {
+	e.style.justify, e.style.align = Center, Center
+	e.touch(true)
+	return e
+}
+func (e *Element) Clip() *Element { e.style.clip = true; e.touch(false); return e }
+func (e *Element) Disabled(disabled bool) *Element {
+	if e.disabled != disabled {
+		if disabled && e.view != nil {
+			e.view.forget(e)
+		}
+		e.disabled = disabled
+		e.touch(false)
+	}
+	return e
+}
+func (e *Element) Hidden(hidden bool) *Element {
+	if e.hidden != hidden {
+		if hidden && e.view != nil {
+			e.view.forget(e)
+		}
+		e.hidden = hidden
+		e.touch(true)
+	}
+	return e
+}
+func (e *Element) Placeholder(s string) *Element     { e.placeholder = s; e.touch(false); return e }
+func (e *Element) Password(secret bool) *Element     { e.password = secret; e.touch(false); return e }
+func (e *Element) Label(s string) *Element           { e.label = s; e.touch(false); return e }
+func (e *Element) OnClick(fn func()) *Element        { e.onClick = fn; return e }
+func (e *Element) OnChange(fn func(string)) *Element { e.onChange = fn; return e }
+func (e *Element) OnToggle(fn func(bool)) *Element   { e.onToggle = fn; return e }
+func (e *Element) OnValue(fn func(float64)) *Element { e.onValue = fn; return e }
+func (e *Element) OnSelect(fn func(int)) *Element    { e.onSelect = fn; return e }
+func (e *Element) OnLink(fn func(string)) *Element   { e.onLink = fn; return e }
+func (e *Element) Bounds() Rect                      { return e.rect }
+func (e *Element) Refresh()                          { e.touch(false) }
+
+func (e *Element) paintPadding(scale float32) int {
+	padding := float32(3)
+	if e.style.shadow {
+		padding = 7
+	}
+	return max(4, int(math.Ceil(float64(padding*scale))))
+}
+
+func (e *Element) rebuildTree() {
+	e.visibleTree = e.visibleTree[:0]
+	seen := make(map[*TreeNode]bool)
+	var walk func([]*TreeNode, int)
+	walk = func(nodes []*TreeNode, depth int) {
+		for _, n := range nodes {
+			if n == nil || seen[n] {
+				panic("ui: tree nodes must be non-nil and have one parent")
+			}
+			seen[n] = true
+			e.visibleTree = append(e.visibleTree, treeRow{n, depth})
+			if e.expanded[n] {
+				walk(n.Children, depth+1)
+			}
+		}
+	}
+	walk(e.tree, 0)
+	if cap(e.visibleTree) > max(256, len(e.visibleTree)*4) {
+		e.visibleTree = append([]treeRow(nil), e.visibleTree...)
+	}
+}
