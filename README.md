@@ -1,37 +1,39 @@
 # fego
 
+**English** | [简体中文](README.zh-CN.md)
+
 A lightweight, pure-Go native desktop UI toolkit for Linux, Windows, and macOS — no CGO or WebView required.
 
-fego 是用 Go 编写的桌面 UI 工具包，提供窗口、布局、表单、数据展示、文本编辑、浅色与深色主题。通过 Go API 创建控件并更新状态，即可构建原生桌面应用。
+fego provides windows, layouts, forms, data views, text editing, and light and dark themes. Create widgets and update their state through Go APIs to build native desktop applications.
 
-[示例](examples/gallery/main.go) · [性能数据](benchmarks/README.md) · [变更记录](CHANGELOG.md) · [CI](https://github.com/zatxm/fego/actions/workflows/ci.yml)
+[Example](examples/gallery/main.go) · [Performance data](benchmarks/README.md) · [Changelog](CHANGELOG.md) · [CI](https://github.com/zatxm/fego/actions/workflows/ci.yml)
 
-| 浅色控件 | 深色控件 |
+| Light controls | Dark controls |
 | --- | --- |
 | ![Light controls](docs/images/controls-light.png) | ![Dark controls](docs/images/controls-dark.png) |
 
-## 平台支持
+## Supported platforms
 
-| 平台 | 窗口系统 | 架构 |
+| Platform | Window system | Architectures |
 | --- | --- | --- |
-| Linux | X11；Wayland 桌面通过 XWayland | amd64、arm64 |
-| Windows | Win32 | amd64、arm64 |
-| macOS | Cocoa | amd64、arm64 |
+| Linux | X11; XWayland on Wayland desktops | amd64, arm64 |
+| Windows | Win32 | amd64, arm64 |
+| macOS | Cocoa | amd64, arm64 |
 
-CI 包含 Linux amd64、Windows amd64 和 macOS arm64 的原生窗口测试，其他目标进行交叉构建检查。
+CI runs native window tests on Linux amd64, Windows amd64, and macOS arm64. Other targets are checked through cross-compilation.
 
-Linux 运行时需要 X11 或 XWayland。中文显示需要系统中文字体，建议安装 Noto Sans CJK；Windows 和 macOS 使用系统字体。没有可用的系统拉丁字体时，会回退到内嵌 Go 字体。
+Linux requires X11 or XWayland at runtime. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
 
-## 快速开始
+## Quick start
 
-安装 Go，工具链要求见 [go.mod](go.mod)。在空目录中创建项目并添加依赖：
+Install Go; see [go.mod](go.mod) for toolchain requirements. In an empty directory, create a project and add the dependency:
 
 ```sh
 go mod init example.com/hello-fego
 go get github.com/zatxm/fego
 ```
 
-新建 `main.go`：
+Create `main.go`:
 
 ```go
 package main
@@ -47,7 +49,7 @@ import (
 func main() {
 	count := 0
 	label := ui.Text("0").FontSize(40).Bold()
-	button := ui.PrimaryButton("增加", func() {
+	button := ui.PrimaryButton("Increment", func() {
 		count++
 		label.SetText(strconv.Itoa(count))
 	})
@@ -60,16 +62,16 @@ func main() {
 }
 ```
 
-运行应用或构建可执行文件：
+Run the application or build an executable:
 
 ```sh
 go run .
 go build .
 ```
 
-## 运行示例
+## Run the gallery
 
-克隆仓库后，可以运行包含表单、表格、弹窗、页面切换和主题切换的示例应用：
+Clone the repository to explore forms, tables, dialogs, page navigation, and theme switching:
 
 ```sh
 git clone https://github.com/zatxm/fego.git
@@ -77,49 +79,49 @@ cd fego
 go run ./examples/gallery
 ```
 
-通过参数选择深色主题或保存窗口截图：
+Use command-line options to start with a dark theme or save a window screenshot:
 
 ```sh
 go run ./examples/gallery -dark
 go run ./examples/gallery -snapshot gallery.png
 ```
 
-## 控件与功能
+## Widgets and features
 
-| 类别 | 接口 |
+| Category | APIs |
 | --- | --- |
-| 布局 | Box、Row、Column、Grid、Card、ScrollView、间距、padding、尺寸和对齐 |
-| 基础控件 | Text、RichText、Button、PrimaryButton、Checkbox、Radio、Switch、Separator、Image |
-| 表单 | TextInput、TextArea、密码、Field、Form、Select、ComboBox、NumberInput、Slider、Progress |
-| 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Menu、Dropdown、Dialog、Toast、Badge、Avatar |
-| 数据 | List、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart |
-| 日期与文档 | Calendar、DatePicker、带行号的 CodeEditor、Markdown 常用语法 |
-| 绘图 | Canvas、Painter 的矩形、圆角、圆、线、文本、图片、Theme、Bounds |
-| 输入 | 鼠标、滚轮、Tab 与方向键、Unicode、选择、剪贴板、撤销、系统输入法提交文本 |
-| 无障碍 | Linux AT-SPI、Windows MSAA、macOS NSAccessibility |
+| Layout | Box, Row, Column, Grid, Card, ScrollView, spacing, padding, sizing, and alignment |
+| Basic widgets | Text, RichText, Button, PrimaryButton, Checkbox, Radio, Switch, Separator, Image |
+| Forms | TextInput, TextArea, password fields, Field, Form, Select, ComboBox, NumberInput, Slider, Progress |
+| Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Menu, Dropdown, Dialog, Toast, Badge, Avatar |
+| Data | List, Table with column sorting, Tree with expand/collapse, LineChart, BarChart |
+| Dates and documents | Calendar, DatePicker, CodeEditor with line numbers, common Markdown syntax |
+| Drawing | Canvas; Painter rectangles, rounded rectangles, circles, lines, text, and images; Theme, Bounds |
+| Input | Mouse, scrolling, Tab and arrow keys, Unicode, selection, clipboard, undo, system input method text commits |
+| Accessibility | Linux AT-SPI, Windows MSAA, macOS NSAccessibility |
 
-## 更新状态与布局
+## Updating state and layout
 
-创建控件树后，使用 `SetText`、`SetValue`、`SetSelected` 等方法更新已有控件。一个控件只能放入一个父节点或窗口；程序调用 setter 不会触发用户交互回调。
+Create the widget tree once, then update existing widgets with methods such as `SetText`, `SetValue`, and `SetSelected`. Each widget belongs to one parent or window. Calling a setter does not invoke user interaction callbacks.
 
-事件回调在 UI 线程执行。后台 goroutine 收到数据后，通过 `window.Update(func() { ... })` 或 `app.Post` 更新界面，避免从后台直接修改控件。`fego.Run` 应从 `main` 调用；使用 `NewApp` 管理窗口时，在运行前配置 `WhenReady`，并从该回调创建窗口。
+Event callbacks run on the UI thread. When a background goroutine receives data, use `window.Update(func() { ... })` or `app.Post` to update the interface. Call `fego.Run` from `main`. When managing windows with `NewApp`, configure `WhenReady` before starting the application and create windows from that callback.
 
-布局尺寸使用逻辑像素。`FillWidth`、`FillHeight` 分别填满对应方向，`Grow` 按父容器的主轴分配剩余空间。`ScrollView` 用于展示超出可视区域的内容，键盘聚焦时会自动滚动到目标控件。
+Layout dimensions use logical pixels. `FillWidth` and `FillHeight` fill their respective axes; `Grow` distributes remaining space along the parent container's main axis. Use `ScrollView` for content larger than the visible area. Keyboard focus automatically scrolls the target widget into view.
 
-`Tabs`、`DatePicker`、`NumberInput`、`ComboBox` 和图表等复合控件通过 `.Element` 放入布局，并用 `.Element.Width(...)` 等方法设置尺寸；保留原对象，调用其专用方法更新值。`Badge`、`Avatar` 是静态装饰，更新内容时替换节点。
+Composite widgets such as `Tabs`, `DatePicker`, `NumberInput`, `ComboBox`, and charts expose `.Element` for placement in layouts. Set dimensions with methods such as `.Element.Width(...)`, and keep the original object to update values through its dedicated methods. `Badge` and `Avatar` are static decorations; replace the node to change their content.
 
-列表、表格和树只绘制可见行。修改列表数据后调用 `Refresh` 或 `SetCount`；修改表格数据后调用 `SetRows`。这些控件会在适用时复用滚动区域，减少重绘工作。
+Lists, tables, and trees draw only visible rows. Call `Refresh` after changing list contents, and `SetCount` when its row count changes. Use `SetRows` to update table data. These widgets reuse scroll regions where possible to reduce repainting.
 
-## 文本与无障碍
+## Text and accessibility
 
-中文、日文等文本依赖系统字体提供相应字形。文本编辑位置按 Unicode rune 计算，暂不支持完整的字素簇编辑、复杂文字 shaping、BiDi 或彩色 emoji。
+CJK text relies on system fonts for the required glyphs. Text editing offsets use Unicode runes. Full grapheme-cluster editing, complex text shaping, BiDi, and color emoji are not yet supported.
 
-密码字段不支持复制和剪切，无障碍接口只返回掩码。Linux 使用读屏功能时，应先开启系统无障碍服务再启动应用；应用运行后才开启读屏时，需要重启应用。
+Password fields disable copying and cutting, and accessibility interfaces expose only masked text. On Linux, enable the system accessibility service before starting the application. If you enable a screen reader after the application has started, restart the application.
 
-## 功能边界
+## Limitations
 
-- 使用 CPU 绘制；暂不支持 GPU 自定义着色器、3D、视频或原生 Wayland 后端。
-- `CodeEditor` 提供文本编辑和行号，不包含 LSP 或富文本所见即所得编辑。
-- Markdown 支持常用语法，尚未覆盖完整 CommonMark；HTML 按普通文本显示，链接通过回调通知应用，仅接受 http、https 和 mailto。
+- Rendering uses the CPU. GPU custom shaders, 3D, video, and a native Wayland backend are not yet supported.
+- `CodeEditor` provides text editing and line numbers, without LSP or rich-text WYSIWYG editing.
+- Markdown supports common syntax but does not implement all of CommonMark. HTML is displayed as plain text. Links notify the application through a callback and accept only http, https, and mailto.
 
-性能测量方法、场景和原始结果见 [性能数据](benchmarks/README.md)。
+See [Performance data](benchmarks/README.md) for measurement methods, scenarios, and raw results.
