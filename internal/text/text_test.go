@@ -1,6 +1,7 @@
 package text
 
 import (
+	"bytes"
 	"fmt"
 	"image"
 	"image/color"
@@ -99,6 +100,25 @@ func TestDrawClipsAndCachesMasks(t *testing.T) {
 	s.Draw(dst, clip, "Hello, 世界", 20, 12, 24, color.RGBA{100, 30, 10, 255}, false)
 	if s.glyphBytes != before {
 		t.Fatal("changing ink regenerated glyph masks")
+	}
+}
+
+func TestClippedDrawMatchesFullImage(t *testing.T) {
+	s := testSystem(t)
+	for _, value := range []string{"Italic fj AV 中 café", "\u0301a\ttext\nsecond line", strings.Repeat("abc ", 100)} {
+		for _, x := range []float32{-250.5, -20, 12.25, 290} {
+			for _, clip := range []image.Rectangle{image.Rect(5, 9, 15, 89), image.Rect(110, 9, 125, 89), image.Rect(5, 22, 125, 31)} {
+				full := image.NewRGBA(image.Rect(5, 9, 125, 89))
+				part := image.NewRGBA(full.Rect)
+				s.Draw(full, full.Rect, value, x, 12.5, 16, color.RGBA{R: 50, A: 200}, false)
+				s.Draw(part, clip, value, x, 12.5, 16, color.RGBA{R: 50, A: 200}, false)
+				cropped := image.NewRGBA(full.Rect)
+				draw.Draw(cropped, clip, full, clip.Min, draw.Src)
+				if !bytes.Equal(part.Pix, cropped.Pix) {
+					t.Fatalf("clipped label differs x=%v clip=%v text=%q", x, clip, value)
+				}
+			}
+		}
 	}
 }
 

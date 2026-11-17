@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/draw"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/zatxm/fego"
@@ -174,6 +175,74 @@ func TestScrollUploadsOnlyExposedPixels(t *testing.T) {
 		t.Fatal("scroll uploaded too much", h.uploaded, h.copies)
 	}
 	checkScrollPixels(t, h)
+}
+
+func TestListLabelsRefreshAndScrolling(t *testing.T) {
+	version := 0
+	calls := map[int]int{}
+	rows := List(100000, func(i int) string {
+		calls[i]++
+		if i == 0 {
+			return ""
+		}
+		return fmt.Sprintf("version %d row %d", version, i)
+	}).Fill()
+	h := newScrollScreen(View(rows), 1, true)
+	defer h.Close()
+	checkCalls := func() {
+		t.Helper()
+		for row, n := range calls {
+			if n != 1 {
+				t.Fatalf("row %d fetched %d times in a frame", row, n)
+			}
+		}
+	}
+	checkCalls()
+	clear(calls)
+	h.Send(fego.Event{Kind: fego.Scroll, X: 20, Y: 50, DY: 8})
+	checkCalls()
+	if len(calls) > 1 {
+		t.Fatal("scroll refetched retained rows", len(calls))
+	}
+	clear(calls)
+	version++
+	rows.Refresh()
+	h.Step()
+	checkCalls()
+	for _, n := range h.nodes {
+		if n.Role == "row" && n.Label != "" && !strings.HasPrefix(n.Label, "version 1 ") {
+			t.Fatalf("stale accessible label: %q", n.Label)
+		}
+	}
+	checkScrollPixels(t, h)
+	v := h.Document.live
+	h.Close()
+	if v.rowLabels != nil {
+		t.Fatal("closed list retains cached labels")
+	}
+}
+
+func TestListLabelCacheBounded(t *testing.T) {
+	rows := List(100000, func(i int) string {
+		if i%2 == 0 {
+			return strings.Repeat("x", 1025)
+		}
+		return fmt.Sprintf("row %d", i)
+	}).Fill()
+	h := newScrollScreen(View(rows), 1, true)
+	defer h.Close()
+	for range 10 {
+		h.Send(fego.Event{Kind: fego.Scroll, X: 20, Y: 50, DY: 400})
+		if len(h.Document.live.rowLabels) > 64 {
+			t.Fatal("list label cache exceeded its entry budget")
+		}
+		for _, label := range h.Document.live.rowLabels {
+			if len(label) > 1024 {
+				t.Fatal("oversized label retained")
+			}
+		}
+		checkScrollPixels(t, h)
+	}
 }
 
 func TestScrollViewCopiesMatchFullLayout(t *testing.T) {

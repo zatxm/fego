@@ -21,16 +21,16 @@ func lineReference(p *Painter, x1, y1, x2, y2, width float32, c Color) {
 	width *= p.scale
 	r := image.Rect(int(math.Floor(float64(min(x1, x2)-width))), int(math.Floor(float64(min(y1, y2)-width))), int(math.Ceil(float64(max(x1, x2)+width))), int(math.Ceil(float64(max(y1, y2)+width)))).Intersect(p.clip).Intersect(p.dst.Rect)
 	dx, dy := x2-x1, y2-y1
-	length := dx*dx + dy*dy
+	length := float32(dx*dx) + float32(dy*dy)
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		for x := r.Min.X; x < r.Max.X; x++ {
 			px, py := float32(x)+.5, float32(y)+.5
 			t := float32(0)
 			if length > 0 {
-				t = max(0, min(1, ((px-x1)*dx+(py-y1)*dy)/length))
+				t = max(0, min(1, (float32((px-x1)*dx)+float32((py-y1)*dy))/length))
 			}
-			a, b := px-(x1+t*dx), py-(y1+t*dy)
-			cov := max(float32(0), min(float32(1), width/2+.5-float32(math.Sqrt(float64(a*a+b*b)))))
+			a, b := px-(x1+float32(t*dx)), py-(y1+float32(t*dy))
+			cov := max(float32(0), min(float32(1), width/2+.5-float32(math.Sqrt(float64(float32(a*a)+float32(b*b))))))
 			if cov > 0 {
 				cc := c
 				cc.A = uint8(float32(c.A) * cov)

@@ -220,6 +220,8 @@ func Select(options []string, selected int) *Element {
 	return e
 }
 func Separator() *Element { return element(kSeparator).Height(1) }
+
+// List obtains visible labels on demand. Call Refresh after changing provider data.
 func List(count int, text func(int) string) *Element {
 	if count < 0 || text == nil {
 		panic("ui: invalid list source")
@@ -328,8 +330,29 @@ func (e *Element) attach(v *view) {
 		c.attach(v)
 	}
 }
+
+// Reuse bounded provider data while scrolling; Refresh invalidates these labels.
+func (e *Element) listText(row int) string {
+	v := e.view
+	id := [2]uint64{e.id, uint64(row)}
+	if label, ok := v.rowLabels[id]; ok {
+		return label
+	}
+	label := e.rowText(row)
+	if len(label) <= 1024 {
+		if v.rowLabels == nil {
+			v.rowLabels = make(map[[2]uint64]string)
+		}
+		if len(v.rowLabels) >= 64 {
+			clear(v.rowLabels)
+		}
+		v.rowLabels[id] = strings.Clone(label)
+	}
+	return label
+}
 func (e *Element) touch(layout bool) {
 	if e.view != nil {
+		clear(e.view.rowLabels)
 		e.view.invalidate(e, layout)
 	}
 }

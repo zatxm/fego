@@ -143,16 +143,17 @@ func (p *Painter) Line(x1, y1, x2, y2, width float32, c Color) {
 	}
 }
 func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c Color) {
-	length := dx*dx + dy*dy
+	// Explicit rounding keeps ARM64 FMA and scalar edge coverage identical.
+	length := float32(dx*dx) + float32(dy*dy)
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		for x := r.Min.X; x < r.Max.X; x++ {
 			px, py := float32(x)+.5, float32(y)+.5
 			t := float32(0)
 			if length > 0 {
-				t = max(0, min(1, ((px-x1)*dx+(py-y1)*dy)/length))
+				t = max(0, min(1, (float32((px-x1)*dx)+float32((py-y1)*dy))/length))
 			}
-			a, b := px-(x1+t*dx), py-(y1+t*dy)
-			cov := max(float32(0), min(float32(1), width/2+.5-float32(math.Sqrt(float64(a*a+b*b)))))
+			a, b := px-(x1+float32(t*dx)), py-(y1+float32(t*dy))
+			cov := max(float32(0), min(float32(1), width/2+.5-float32(math.Sqrt(float64(float32(a*a)+float32(b*b))))))
 			if cov > 0 {
 				cc := c
 				cc.A = uint8(float32(c.A) * cov)
@@ -540,6 +541,7 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 	p.clip = p.clip.Intersect(Rect{r.X, y0, r.W, r.H - header}.pixels(v.scale))
 	first := max(0, int(e.scroll/rowH))
 	last := min(e.rowCount(), int((e.scroll+r.H-header)/rowH)+1)
+	_, th := v.text.Measure("Ag", font, false)
 	for i := first; i < last; i++ {
 		bodyClip := p.clip
 		y := y0 + float32(i)*rowH - e.scroll
@@ -555,11 +557,10 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 		} else if i%2 != 0 && e.kind == kTable {
 			p.Rect(rr, mix(t.Surface, t.Background, .4))
 		}
-		_, th := v.text.Measure("Ag", font, false)
 		ty := y + (rowH-th)/2
 		switch e.kind {
 		case kList:
-			p.Label(e.rowText(i), r.X+12, ty, font, fg, false)
+			p.Label(e.listText(i), r.X+12, ty, font, fg, false)
 		case kTree:
 			tr := e.visibleTree[i]
 			x := r.X + 12 + float32(tr.depth)*18

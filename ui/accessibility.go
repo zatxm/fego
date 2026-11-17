@@ -95,7 +95,7 @@ func (v *view) updateAccessibility() {
 				role := "row"
 				switch e.kind {
 				case kList:
-					text = e.rowText(row)
+					text = e.listText(row)
 				case kTree:
 					text = e.visibleTree[row].node.Label
 					role = "treeitem"

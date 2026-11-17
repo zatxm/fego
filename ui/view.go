@@ -59,11 +59,13 @@ type view struct {
 	frames, paints          uint64
 	access                  map[uint64]accessTarget
 	accessNodes             []fego.AccessNode
+	rowLabels               map[[2]uint64]string
 	scrolling               *pixelScroll
 	scrollState             pixelScroll
 }
 
 func (v *view) Close() {
+	v.rowLabels = nil
 	v.root.attach(nil)
 	if v.dialog != nil {
 		v.dialog.attach(nil)

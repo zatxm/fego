@@ -76,8 +76,9 @@ type positioned struct {
 }
 
 type layout struct {
-	glyphs []positioned
-	w, h   int64
+	glyphs     []positioned
+	w, h       int64
+	minX, maxX int64
 }
 
 // System owns read-only system font handles and bounded reusable caches.
@@ -263,6 +264,9 @@ func (s *System) Draw(dst *image.RGBA, clip image.Rectangle, text string, x, y, 
 		return
 	}
 	l := s.layout(text, q, bold)
+	if x+float32(l.maxX)/64 < float32(clip.Min.X)-size*2 || x+float32(l.minX)/64 > float32(clip.Max.X)+size*2 {
+		return
+	}
 	s.ink = ink
 	for _, p := range l.glyphs {
 		gx := x + float32(p.x)/64
@@ -429,6 +433,7 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 		metrics := s.face(faceKey{src, size}).Metrics()
 		ascent, descent = max(ascent, metrics.Ascent), max(descent, metrics.Descent)
 		l.glyphs = append(l.glyphs, positioned{source: src, r: r, x: x})
+		l.minX, l.maxX = min(l.minX, x), max(l.maxX, x)
 		x += int64(g.advance)
 		previous, prevIndex = src, g.index
 	}
@@ -439,7 +444,7 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 		s.numericLength, s.numericSize, s.numericBold = len(text), size, bold
 		return l
 	}
-	n := len(text) + cap(l.glyphs)*32 + 80
+	n := len(text) + cap(l.glyphs)*32 + 96
 	if n <= maxLayoutBytes {
 		if len(s.layouts) >= maxLayouts || s.layoutBytes+n > maxLayoutBytes {
 			clear(s.layouts)
