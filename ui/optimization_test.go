@@ -78,7 +78,11 @@ func TestLineSpanMatchesReference(t *testing.T) {
 			p.Line(x1, y1, x2, y2, width, ink)
 			lineReference(&q, x1, y1, x2, y2, width, ink)
 			if !bytes.Equal(a.Pix, b.Pix) {
-				t.Fatalf("line differs scale=%v line=%d", scale, i)
+				for j := range a.Pix {
+					if a.Pix[j] != b.Pix[j] {
+						t.Fatalf("line differs scale=%v line=%d pixel=(%d,%d) channel=%d got=%d want=%d", scale, i, a.Rect.Min.X+(j%a.Stride)/4, a.Rect.Min.Y+j/a.Stride, j%4, a.Pix[j], b.Pix[j])
+					}
+				}
 			}
 		}
 	}
