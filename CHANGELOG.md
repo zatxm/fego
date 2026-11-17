@@ -2,7 +2,7 @@
 
 ## v0.1.0 — 待发布
 
-首个公开版本；这是独立实现的纯 Go 桌面 UI，不是 mygo 的源码或 import 兼容层。
+提供纯 Go 桌面 UI、原生窗口和常用控件。
 
 - Linux X11/XWayland、Windows Win32、macOS Cocoa 平台后端，支持 amd64/arm64 与 `CGO_ENABLED=0`。
 - 保留式布局、深浅主题、表单、导航、虚拟列表/表格/树、图表、日期选择、代码编辑器和常用 Markdown。
