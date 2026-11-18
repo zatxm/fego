@@ -74,7 +74,7 @@ func TestATSPIRealBus(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer client.Close()
-	object := func(id uint64) dbus.BusObject { return client.Object(a.name, a.ref(id).Path) }
+	object := func(id uint64) dbus.BusObject { return client.Object(a.name, dbus.ObjectPath(a.ref(id).Path)) }
 	var children []atspiRef
 	if err := atspiTestCall(t, object(1), atspiPrefix+"Accessible.GetChildren").Store(&children); err != nil {
 		t.Fatal(err)
@@ -217,11 +217,11 @@ func TestX11AccessibilityQueriesOriginOnlyOnWindowChanges(t *testing.T) {
 	nodes[0].Label = "after"
 	w.SetAccessibility(nodes)
 	w.SetAccessibility(nodes)
-	if calls != 1 || w.access.tree.Load().origin != image.Pt(10, 20) {
+	if calls != 1 || w.access.current().origin != image.Pt(10, 20) {
 		t.Fatal("origin queried per frame", calls)
 	}
 	w.refreshAccessibility()
-	if calls != 2 || w.access.tree.Load().origin != image.Pt(20, 40) {
+	if calls != 2 || w.access.current().origin != image.Pt(20, 40) {
 		t.Fatal("window change kept stale origin", calls)
 	}
 }
@@ -267,7 +267,7 @@ func TestATSPIRegistry(t *testing.T) {
 		t.Fatalf("application did not embed in registry: %s", log.String())
 	}
 	var children []atspiRef
-	if err := atspiTestCall(t, client.Object(atspiPrefix+"Registry", atspiRoot), atspiPrefix+"Accessible.GetChildren").Store(&children); err != nil {
+	if err := atspiTestCall(t, client.Object(atspiPrefix+"Registry", dbus.ObjectPath(atspiRoot)), atspiPrefix+"Accessible.GetChildren").Store(&children); err != nil {
 		t.Fatal(err)
 	}
 	found := false
@@ -280,7 +280,7 @@ func TestATSPIRegistry(t *testing.T) {
 		t.Fatalf("registered application missing from desktop: %v", children)
 	}
 	var appChildren []atspiRef
-	if err := atspiTestCall(t, client.Object(a.name, atspiRoot), atspiPrefix+"Accessible.GetChildren").Store(&appChildren); err != nil || len(appChildren) != 1 {
+	if err := atspiTestCall(t, client.Object(a.name, dbus.ObjectPath(atspiRoot)), atspiPrefix+"Accessible.GetChildren").Store(&appChildren); err != nil || len(appChildren) != 1 {
 		t.Fatalf("app window query=%v err=%v", appChildren, err)
 	}
 	// Exercise the installed client library used by Linux assistive technology.
@@ -401,7 +401,7 @@ func TestATSPIMainThread(t *testing.T) {
 	default:
 		t.Fatal("wake did not dispatch action")
 	}
-	snapshot := w.access.tree.Load()
+	snapshot := w.access.current()
 	w.Close()
 	if w.access != nil {
 		t.Fatal("closed window retained its accessibility bridge")
@@ -443,7 +443,7 @@ func TestATSPIRegistrySubscriptions(t *testing.T) {
 		_ = listener.BusObject().Call("org.freedesktop.DBus.NameHasOwner", 0, atspiPrefix+"Registry").Store(&owned)
 		return owned
 	})
-	registryObject := listener.Object(atspiPrefix+"Registry", atspiRegistryPath)
+	registryObject := listener.Object(atspiPrefix+"Registry", dbus.ObjectPath(atspiRegistryPath))
 	// The constructor must load listeners that registered before the application.
 	atspiTestCall(t, registryObject, atspiPrefix+"Registry.RegisterEvent", "object:state-changed:focused", []string{}, "")
 	a, err := newATSPI(address, "Subscriptions", image.Rect(0, 0, 400, 200), func() {})
@@ -517,7 +517,7 @@ func TestATSPIRegistrySubscriptions(t *testing.T) {
 	nodes[0].Focused = false
 	nodes[1].Value = "four"
 	a.update("Subscriptions", image.Rect(0, 0, 400, 200), image.Point{}, nodes)
-	value, err := listener.Object(a.name, a.ref(1).Path).GetProperty(atspiPrefix + "Accessible.Name")
+	value, err := listener.Object(a.name, dbus.ObjectPath(a.ref(1).Path)).GetProperty(atspiPrefix + "Accessible.Name")
 	if err != nil || value.Value() != "Unsubscribed" {
 		t.Fatalf("query tree stopped after unsubscribe: %v %v", value, err)
 	}
@@ -531,7 +531,7 @@ func TestATSPIRegistrySubscriptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	atspiTestCall(t, transient.Object(atspiPrefix+"Registry", atspiRegistryPath), atspiPrefix+"Registry.RegisterEvent", "object", []string{}, "")
+	atspiTestCall(t, transient.Object(atspiPrefix+"Registry", dbus.ObjectPath(atspiRegistryPath)), atspiPrefix+"Registry.RegisterEvent", "object", []string{}, "")
 	wait(func() bool { return a.wants("BoundsChanged", "") })
 	transient.Close()
 	wait(func() bool { return len(a.listeners.Load().events) == 0 })

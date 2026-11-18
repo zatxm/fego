@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"math"
+	"math/rand/v2"
 	"os"
 	"reflect"
 	"strings"
@@ -181,7 +182,7 @@ func TestCacheBudgets(t *testing.T) {
 
 func TestASCIIGlyphCacheInvalidates(t *testing.T) {
 	s := testSystem(t)
-	key := glyphKey{s.regular[0], fontSize(14), 'A'}
+	key := glyphKey{s.latin(0), fontSize(14), 'A'}
 	first := s.glyph(key)
 	if s.glyph(key) != first {
 		t.Fatal("ASCII glyph was not reused")
@@ -191,7 +192,7 @@ func TestASCIIGlyphCacheInvalidates(t *testing.T) {
 	if s.glyph(other) == first || s.glyph(key) != first {
 		t.Fatal("font-size change reused the wrong glyph")
 	}
-	other.source = s.regular[1]
+	other.source = s.latin(1)
 	if s.glyph(other) != s.glyphs[other] {
 		t.Fatal("font source differs from the bounded glyph cache")
 	}
@@ -362,5 +363,37 @@ func BenchmarkCachedDraw(b *testing.B) {
 	b.ResetTimer()
 	for b.Loop() {
 		s.Draw(dst, dst.Bounds(), "Performance 性能", 0, 0, 14, color.RGBA{A: 255}, false)
+	}
+}
+
+func TestGlyphBlendMatchesDrawMask(t *testing.T) {
+	rng := rand.New(rand.NewPCG(7, 8))
+	s := &System{}
+	for range 300 {
+		ink := color.RGBA{A: uint8(rng.IntN(256))}
+		if rng.IntN(3) > 0 {
+			ink.A = 255
+		}
+		ink.R, ink.G, ink.B = uint8(rng.IntN(int(ink.A)+1)), uint8(rng.IntN(int(ink.A)+1)), uint8(rng.IntN(int(ink.A)+1))
+		mask := image.NewAlpha(image.Rect(0, 0, 1+rng.IntN(20), 1+rng.IntN(20)))
+		for i := range mask.Pix {
+			mask.Pix[i] = []uint8{0, 255, uint8(rng.IntN(256))}[rng.IntN(3)]
+		}
+		want := image.NewRGBA(image.Rect(-3, 2, 30, 30))
+		for i := range want.Pix {
+			want.Pix[i] = uint8(rng.IntN(256))
+		}
+		got := image.NewRGBA(want.Rect)
+		copy(got.Pix, want.Pix)
+		// Draw passes a destination area inside both the image and the glyph mask.
+		mp := image.Pt(rng.IntN(mask.Rect.Dx()), rng.IntN(mask.Rect.Dy()))
+		min := image.Pt(rng.IntN(5)-3, 2+rng.IntN(5))
+		r := image.Rectangle{min, min.Add(mask.Rect.Size().Sub(mp))}
+		draw.DrawMask(want, r, image.NewUniform(ink), image.Point{}, mask, mp, draw.Over)
+		s.setInk(ink)
+		s.drawGlyph(got, r, mask, mp)
+		if !bytes.Equal(got.Pix, want.Pix) {
+			t.Fatalf("ink %v mask %v r %v mp %v differs", ink, mask.Rect, r, mp)
+		}
 	}
 }

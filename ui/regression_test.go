@@ -1,12 +1,17 @@
 package ui
 
 import (
+	"bytes"
 	"fmt"
+	"image"
+	"image/color"
 	"math"
+	"math/rand/v2"
 	"strings"
 	"testing"
 
 	"github.com/zatxm/fego"
+	fonttext "github.com/zatxm/fego/internal/text"
 )
 
 func TestFillDimensionsAndScrollClipping(t *testing.T) {
@@ -319,5 +324,100 @@ func TestAccessibilityActionsPrivacyAndModalBoundary(t *testing.T) {
 	host.Send(fego.Event{Kind: fego.AccessAction, AccessID: check.id, Action: "press"})
 	if !check.Checked() {
 		t.Fatal("hidden control activated")
+	}
+}
+
+func TestOpaqueImageSamplingIgnoresClip(t *testing.T) {
+	src := image.NewRGBA(image.Rect(3, 7, 10, 12))
+	for i := range src.Pix {
+		src.Pix[i] = uint8(i*37 + 11)
+	}
+	for i := 3; i < len(src.Pix); i += 4 {
+		src.Pix[i] = 255
+	}
+	r := Rect{4, 6, 37, 17}
+	dst := r.pixels(1)
+	for _, clip := range []image.Rectangle{dst, image.Rect(0, 8, 64, 11), image.Rect(9, 13, 30, 40), image.Rect(0, 22, 64, 23)} {
+		out := image.NewRGBA(image.Rect(0, 0, 64, 32))
+		p := &Painter{dst: out, clip: clip, scale: 1}
+		p.Image(src, r)
+		for y := 0; y < 32; y++ {
+			for x := 0; x < 64; x++ {
+				want := color.RGBA{}
+				if image.Pt(x, y).In(dst.Intersect(clip)) {
+					want = src.RGBAAt(src.Rect.Min.X+(x-dst.Min.X)*src.Rect.Dx()/dst.Dx(), src.Rect.Min.Y+(y-dst.Min.Y)*src.Rect.Dy()/dst.Dy())
+				}
+				if got := out.RGBAAt(x, y); got != want {
+					t.Fatalf("clip %v pixel %d,%d=%v want %v", clip, x, y, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestTranslucentFillMatchesPixelBlend(t *testing.T) {
+	for _, c := range []Color{RGBA(22, 40, 76, 3), RGBA(8, 16, 32, 96), RGBA(255, 255, 255, 1), RGBA(0, 0, 0, 254), RGBA(200, 100, 50, 128)} {
+		for _, size := range []image.Point{{16, 16}, {300, 220}} {
+			got := image.NewRGBA(image.Rect(3, 5, 3+size.X, 5+size.Y))
+			for i := range got.Pix {
+				got.Pix[i] = uint8(i*131 + i/4)
+			}
+			want := image.NewRGBA(got.Rect)
+			copy(want.Pix, got.Pix)
+			(&Painter{dst: got, clip: got.Rect}).fillPixels(got.Rect, c)
+			reference := &Painter{dst: want, clip: want.Rect}
+			for y := want.Rect.Min.Y; y < want.Rect.Max.Y; y++ {
+				for x := want.Rect.Min.X; x < want.Rect.Max.X; x++ {
+					reference.pixel(x, y, c)
+				}
+			}
+			if !bytes.Equal(got.Pix, want.Pix) {
+				t.Fatalf("translucent fill %v size %v differs from per-pixel blend", c, size)
+			}
+		}
+	}
+}
+
+func TestTextOnSolidFillMatchesBlending(t *testing.T) {
+	text := fonttext.New()
+	defer text.Close()
+	icon := image.NewRGBA(image.Rect(0, 0, 3, 3))
+	for i := range icon.Pix {
+		icon.Pix[i] = uint8(i*29) | uint8(255*(i%4/3)) // opaque: direct row copies
+	}
+	rng := rand.New(rand.NewPCG(9, 10))
+	for range 2000 {
+		fast := &Painter{dst: image.NewRGBA(image.Rect(0, 0, 120, 60)), clip: image.Rect(0, 0, 120, 60), scale: 1, text: text}
+		fast.clip.Max.Y -= rng.IntN(20)
+		slow := &Painter{dst: image.NewRGBA(fast.dst.Rect), clip: fast.clip, scale: 1, text: text}
+		// Operations cluster so overlays often land under a later label.
+		cx, cy := float32(20+rng.IntN(60)), float32(10+rng.IntN(30))
+		for range 1 + rng.IntN(6) {
+			kind, x, y := rng.IntN(6), cx+float32(rng.IntN(24)-4), cy+float32(rng.IntN(12)-2)
+			c := RGB(uint8(rng.IntN(256)), uint8(rng.IntN(256)), uint8(rng.IntN(256)))
+			ink, size := RGBA(20, 30, 40, 255-uint8(rng.IntN(2))*100), 11+float32(rng.IntN(3))
+			for _, p := range []*Painter{fast, slow} {
+				switch kind {
+				case 0:
+					p.Rect(Rect{x - 20, y - 10, 70, 30}, c)
+				case 1:
+					p.Line(x, y, x+9, y+3, 1.5, c)
+				case 2:
+					p.Circle(x, y, 2.5, c)
+				case 3:
+					p.Rect(Rect{x, y, 6, 6}, RGBA(c.R, c.G, c.B, 90))
+				case 4:
+					p.Image(icon, Rect{x, y, 6, 6})
+				default:
+					if p == slow {
+						p.solid = image.Rectangle{} // reference: always blend
+					}
+					p.Label("Ag 1.5", cx-2, cy-2, size, ink, false)
+				}
+			}
+		}
+		if !bytes.Equal(fast.dst.Pix, slow.dst.Pix) {
+			t.Fatal("text over a solid fill differs from blending")
+		}
 	}
 }

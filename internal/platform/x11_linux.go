@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode"
@@ -167,6 +168,9 @@ var xl struct {
 	setLocale            func(int32, string) *byte
 }
 
+// Raw symbols for per-frame calls; purego's reflective wrappers allocate per call.
+var xRaw struct{ pending, nextEvent, filterEvent, copyArea uintptr }
+
 var xLoad struct {
 	sync.Once
 	err error
@@ -214,6 +218,15 @@ func loadX11() error {
 			xLoad.err = err
 			return
 		}
+		for _, f := range []struct {
+			name string
+			dest *uintptr
+		}{{"XPending", &xRaw.pending}, {"XNextEvent", &xRaw.nextEvent}, {"XFilterEvent", &xRaw.filterEvent}, {"XCopyArea", &xRaw.copyArea}} {
+			if *f.dest, err = purego.Dlsym(lib, f.name); err != nil {
+				xLoad.err = err
+				return
+			}
+		}
 		purego.RegisterLibFunc(&xl.calloc, libc, "calloc")
 		purego.RegisterLibFunc(&xl.setLocale, libc, "setlocale")
 		xl.setErrorHandler(purego.NewCallback(func(display uintptr, e *xErrorEvent) int32 {
@@ -222,7 +235,9 @@ func loadX11() error {
 				return 0
 			}
 			xBackends.Lock()
-			if b := xBackends.byDisplay[display]; b != nil && b.err == nil {
+			if b := xBackends.byDisplay[display]; b != nil && b.shmProbing && e.Request == b.shmMajor {
+				b.shmFailed = true
+			} else if b != nil && b.err == nil {
 				b.err = fmt.Errorf("X11 error %d, request %d, resource %#x", e.Code, e.Request, e.Resource)
 				b.quit = true
 			}
@@ -246,8 +261,17 @@ type xBackend struct {
 	clipboard                                                                                    string
 	transfer                                                                                     *xClipboardRead
 	wakeMu                                                                                       sync.Mutex
-	wakeRead, wakeWrite                                                                          *os.File
-	wakeReadFD, wakeWriteFD                                                                      int
+	conn                                                                                         *os.File
+	rawConn                                                                                      syscall.RawConn
+	woken, waiting, kicked                                                                       atomic.Bool
+	deadline, readChecked                                                                        bool
+	readReady                                                                                    func(uintptr) bool
+	runEvent                                                                                     xEvent
+	callArgs                                                                                     [2]uintptr
+	shmState                                                                                     int8 // 0 unknown, 1 usable, -1 off
+	shmMajor                                                                                     uint8
+	shmCompletion                                                                                int32
+	shmProbing, shmFailed                                                                        bool
 	quit, ran                                                                                    bool
 	err                                                                                          error
 }
@@ -261,6 +285,9 @@ type xWindow struct {
 	imageBytes                             int
 	smallUploads                           int
 	surfaceSize, accessOrigin              image.Point
+	exposed                                image.Rectangle
+	shm                                    *xShm
+	presented                              bool
 	originKnown                            bool
 	width, height                          int
 	focused, textInput, closed, configured bool
@@ -287,22 +314,8 @@ func New(dispatch func()) (Backend, error) {
 	if d == 0 {
 		return nil, errors.New("cannot open X11 display (DISPLAY/XWayland is required)")
 	}
-	r, w, err := os.Pipe()
-	if err != nil {
-		xl.closeDisplay(d)
-		return nil, err
-	}
-	b := &xBackend{display: d, dispatch: dispatch, windows: make(map[uintptr]*xWindow), cursors: make(map[uint32]uintptr), wakeRead: r, wakeWrite: w, fd: int(xl.connection(d)), scale: 1}
-	b.wakeReadFD, b.wakeWriteFD = int(r.Fd()), int(w.Fd())
-	if b.fd >= 1024 || b.wakeReadFD >= 1024 {
-		b.release()
-		return nil, errors.New("X11 file descriptor exceeds select capacity")
-	}
-	if err := syscall.SetNonblock(b.wakeReadFD, true); err != nil {
-		b.release()
-		return nil, err
-	}
-	if err := syscall.SetNonblock(b.wakeWriteFD, true); err != nil {
+	b := &xBackend{display: d, dispatch: dispatch, windows: make(map[uintptr]*xWindow), cursors: make(map[uint32]uintptr), fd: int(xl.connection(d)), scale: 1}
+	if err := b.openConn(); err != nil {
 		b.release()
 		return nil, err
 	}
@@ -399,10 +412,12 @@ func (b *xBackend) Run() error {
 	b.ran = true
 	defer b.release()
 	for !b.quit {
-		for !b.quit && xl.pending(b.display) > 0 {
-			var e xEvent
-			xl.nextEvent(b.display, &e)
-			b.event(&e)
+		for !b.quit && b.pending() {
+			// Run is not reentrant; nested clipboard loops use their own event storage.
+			e := &b.runEvent
+			b.callArgs = [2]uintptr{b.display, uintptr(unsafe.Pointer(e))}
+			purego.SyscallN(xRaw.nextEvent, b.callArgs[:]...)
+			b.event(e)
 		}
 		if !b.quit {
 			if err := b.wait(-1); err != nil {
@@ -413,32 +428,70 @@ func (b *xBackend) Run() error {
 	return b.err
 }
 
-func (b *xBackend) wait(timeout time.Duration) error {
-	xl.flush(b.display)
-	var fds syscall.FdSet
-	read := b.wakeReadFD
-	fds.Bits[b.fd/64] |= 1 << uint(b.fd%64)
-	fds.Bits[read/64] |= 1 << uint(read%64)
-	var tv *syscall.Timeval
-	if timeout >= 0 {
-		t := syscall.NsecToTimeval(timeout.Nanoseconds())
-		tv = &t
-	}
-	_, err := syscall.Select(max(b.fd, read)+1, &fds, nil, nil, tv)
-	if err == syscall.EINTR {
-		return nil
-	}
+// openConn lets the UI thread park in Go's netpoller on a duplicate X
+// descriptor. A raw blocking select kept the runtime's sysmon polling each frame.
+func (b *xBackend) openConn() error {
+	fd, err := syscall.Dup(b.fd)
 	if err != nil {
 		return err
 	}
-	if fds.Bits[read/64]&(1<<uint(read%64)) != 0 {
-		var buf [128]byte
-		for {
-			n, err := syscall.Read(read, buf[:])
-			if err != nil || n == 0 {
-				break
+	syscall.CloseOnExec(fd)
+	// Xlib's connection is already nonblocking; the duplicate shares that status.
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return err
+	}
+	f := os.NewFile(uintptr(fd), "x11")
+	rc, err := f.SyscallConn()
+	if err == nil {
+		err = f.SetReadDeadline(time.Time{})
+	}
+	if err != nil {
+		f.Close()
+		return fmt.Errorf("X11 connection is not pollable: %w", err)
+	}
+	b.conn, b.rawConn = f, rc
+	return nil
+}
+
+func (b *xBackend) pending() bool {
+	b.callArgs[0] = b.display
+	n, _, _ := purego.SyscallN(xRaw.pending, b.callArgs[:1]...)
+	return int32(n) > 0
+}
+
+func (b *xBackend) wait(timeout time.Duration) error {
+	b.callArgs[0] = b.display
+	purego.SyscallN(xl.flushImage, b.callArgs[:1]...)
+	if timeout >= 0 {
+		b.conn.SetReadDeadline(time.Now().Add(timeout))
+		b.deadline = true
+	} else if b.deadline || b.kicked.Swap(false) {
+		b.conn.SetReadDeadline(time.Time{})
+		b.deadline = false
+	}
+	// Wake stores woken before checking waiting; this order prevents a lost wakeup.
+	b.waiting.Store(true)
+	var err error
+	if !b.woken.Load() {
+		if b.readReady == nil {
+			b.readReady = func(uintptr) bool {
+				if !b.readChecked {
+					// Readiness is reset before this call; events read earlier stay queued in Xlib.
+					b.readChecked = true
+					return b.pending()
+				}
+				return true
 			}
 		}
+		b.readChecked = false
+		err = b.rawConn.Read(b.readReady)
+	}
+	b.waiting.Store(false)
+	if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+		return err
+	}
+	if b.woken.Swap(false) {
 		for _, w := range b.windows {
 			if w.access != nil {
 				w.access.drain(func(e Event) {
@@ -456,9 +509,14 @@ func (b *xBackend) wait(timeout time.Duration) error {
 }
 
 func (b *xBackend) Wake() {
+	b.woken.Store(true)
+	if !b.waiting.Load() {
+		return
+	}
 	b.wakeMu.Lock()
-	if b.wakeWrite != nil {
-		_, _ = syscall.Write(b.wakeWriteFD, []byte{1})
+	if b.conn != nil {
+		b.kicked.Store(true)
+		b.conn.SetReadDeadline(time.Unix(1, 0))
 	}
 	b.wakeMu.Unlock()
 }
@@ -485,15 +543,11 @@ func (b *xBackend) release() {
 		xBackends.Unlock()
 	}
 	b.wakeMu.Lock()
-	if b.wakeWrite != nil {
-		b.wakeWrite.Close()
-		b.wakeWrite = nil
+	if b.conn != nil {
+		b.conn.Close()
+		b.conn, b.rawConn = nil, nil
 	}
 	b.wakeMu.Unlock()
-	if b.wakeRead != nil {
-		b.wakeRead.Close()
-		b.wakeRead = nil
-	}
 }
 
 func (b *xBackend) event(raw *xEvent) {
@@ -520,7 +574,12 @@ func (b *xBackend) event(raw *xEvent) {
 		}
 		return
 	}
-	if xl.filterEvent(raw, 0) != 0 {
+	if b.shmCompletion != 0 && a.Kind == b.shmCompletion {
+		b.shmEvent(raw)
+		return
+	}
+	b.callArgs = [2]uintptr{uintptr(unsafe.Pointer(raw)), 0}
+	if r, _, _ := purego.SyscallN(xRaw.filterEvent, b.callArgs[:]...); int32(r) != 0 {
 		return
 	}
 	w := b.windows[a.Window]
@@ -532,15 +591,21 @@ func (b *xBackend) event(raw *xEvent) {
 	}
 	switch a.Kind {
 	case xExpose, xGraphicsExpose:
+		// Collect a series of exposed rectangles; count is the number still to come.
+		x, y := int(int32(raw[5])), int(int32(raw[5]>>32))
+		lost := image.Rect(x, y, x+int(int32(raw[6])), y+int(int32(raw[6]>>32)))
+		w.exposed = w.exposed.Union(lost)
 		if int32(raw[7]) != 0 {
 			return
 		}
+		lost, w.exposed = w.exposed, image.Rectangle{}
 		if !w.configured {
 			w.configured = true
+			lost = image.Rectangle{}
 			w.emit(Event{Kind: Resize, Width: w.width, Height: w.height, Scale: b.scale})
 		}
 		if !w.closed {
-			w.emit(Event{Kind: Paint})
+			w.emit(Event{Kind: Paint, X: float32(lost.Min.X), Y: float32(lost.Min.Y), Width: lost.Dx(), Height: lost.Dy()})
 		}
 	case xMap, xReparent:
 		w.refreshAccessibility()
@@ -719,14 +784,33 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 		return
 	}
 	bounds := src.Bounds()
-	width, height := bounds.Dx(), bounds.Dy()
+	if !w.presented || w.surfaceSize != bounds.Size() {
+		damage = []image.Rectangle{bounds}
+	}
+	if w.present(src, damage, bounds.Min) {
+		w.surfaceSize = bounds.Size()
+	}
+}
+
+// PresentRegion uploads a damaged region; the X server retains the rest and
+// reports lost pixels with Expose, which becomes a full Paint event.
+func (w *xWindow) PresentRegion(src *image.RGBA) {
+	if w.closed || src == nil {
+		return
+	}
+	damage := [1]image.Rectangle{src.Rect}
+	if w.present(src, damage[:], image.Point{}) {
+		// A later full-surface Present must upload everything again.
+		w.surfaceSize = image.Point{}
+	}
+}
+
+func (w *xWindow) present(src *image.RGBA, damage []image.Rectangle, origin image.Point) bool {
+	bounds := src.Bounds()
 	if !xValidRGBA(src) {
 		w.b.err = errors.New("invalid RGBA surface")
 		w.b.Quit()
-		return
-	}
-	if w.img == nil || w.surfaceSize != image.Pt(width, height) {
-		damage = []image.Rectangle{bounds}
+		return false
 	}
 	needed := 0
 	for _, rect := range damage {
@@ -734,37 +818,22 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 		needed = max(needed, min(xUploadBytes, r.Dx()*r.Dy()*4))
 	}
 	if needed == 0 {
-		return
+		return false
 	}
-	if w.img == nil {
-		im := xl.createImage(w.b.display, w.b.visual, uint32(w.b.depth), 2, 0, nil, 1, 1, 32, 0)
-		if im == nil {
-			w.b.err = errors.New("XCreateImage failed")
-			w.b.Quit()
-			return
+	capacity := w.uploadCapacity(needed)
+	shm := w.shmBuffers(capacity)
+	if shm != nil {
+		if w.img != nil {
+			xl.destroyImage(w.img)
+			w.img = nil
 		}
-		if im.BitsPerPixel != 32 || im.BitmapPad != 32 || im.Red != 0xff0000 || im.Green != 0xff00 || im.Blue != 0xff {
-			xl.destroyImage(im)
-			w.b.err = errors.New("unsupported XImage pixel layout")
-			w.b.Quit()
-			return
-		}
-		w.img = im
+		w.imageBytes = capacity
+	} else if !w.socketBuffers(capacity) {
+		return false
 	}
 	im := w.img
-	capacity := w.uploadCapacity(needed)
-	if capacity != w.imageBytes {
-		data := xl.calloc(uintptr(capacity), 1)
-		if data == nil {
-			w.b.err = errors.New("XImage allocation failed")
-			w.b.Quit()
-			return
-		}
-		if im.Data != nil {
-			xl.free(unsafe.Pointer(im.Data))
-		}
-		im.Data = data
-		w.imageBytes = capacity
+	if shm != nil {
+		im = shm.img
 	}
 	for _, rect := range damage {
 		r := rect.Intersect(bounds)
@@ -774,22 +843,65 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 		rows := max(1, w.imageBytes/(r.Dx()*4))
 		for y := r.Min.Y; y < r.Max.Y; y += rows {
 			tile := image.Rect(r.Min.X, y, r.Max.X, min(y+rows, r.Max.Y))
-			// XPutImage copies each tile before returning, so this buffer is reusable.
 			im.Width, im.Height, im.BytesPerLine = int32(tile.Dx()), int32(tile.Dy()), int32(tile.Dx()*4)
-			pix := unsafe.Slice(im.Data, int(im.BytesPerLine)*tile.Dy())
+			var pix []byte
+			if shm != nil {
+				pix = w.shmTile(shm)[:int(im.BytesPerLine)*tile.Dy()]
+			} else {
+				// XPutImage copies each tile before returning, so this buffer is reusable.
+				pix = unsafe.Slice(im.Data, int(im.BytesPerLine)*tile.Dy())
+			}
 			view := *src
 			view.Pix = src.Pix[src.PixOffset(tile.Min.X, tile.Min.Y):]
 			view.Rect = tile
 			xCopyPixels(pix, int(im.BytesPerLine), &view, tile, im.ByteOrder != 0)
-			x, dy := tile.Min.X-bounds.Min.X, tile.Min.Y-bounds.Min.Y
-			w.putImage(int32(x), int32(dy), uint32(tile.Dx()), uint32(tile.Dy()))
+			x, dy := tile.Min.X-origin.X, tile.Min.Y-origin.Y
+			if shm != nil {
+				w.shmPut(shm, int32(x), int32(dy), uint32(tile.Dx()), uint32(tile.Dy()))
+			} else {
+				w.putImage(int32(x), int32(dy), uint32(tile.Dx()), uint32(tile.Dy()))
+			}
 		}
 	}
-	w.surfaceSize = image.Pt(width, height)
 	runtime.KeepAlive(src)
 	w.putArgs[0] = w.b.display
 	purego.SyscallN(xl.flushImage, w.putArgs[:1]...)
 	runtime.KeepAlive(w)
+	w.presented = true
+	return true
+}
+
+// socketBuffers keeps a client-side staging image for XPutImage.
+func (w *xWindow) socketBuffers(capacity int) bool {
+	if w.img == nil {
+		im := xl.createImage(w.b.display, w.b.visual, uint32(w.b.depth), 2, 0, nil, 1, 1, 32, 0)
+		if im == nil {
+			w.b.err = errors.New("XCreateImage failed")
+			w.b.Quit()
+			return false
+		}
+		if im.BitsPerPixel != 32 || im.BitmapPad != 32 || im.Red != 0xff0000 || im.Green != 0xff00 || im.Blue != 0xff {
+			xl.destroyImage(im)
+			w.b.err = errors.New("unsupported XImage pixel layout")
+			w.b.Quit()
+			return false
+		}
+		w.img = im
+	}
+	if im := w.img; capacity != w.imageBytes || im.Data == nil {
+		data := xl.calloc(uintptr(capacity), 1)
+		if data == nil {
+			w.b.err = errors.New("XImage allocation failed")
+			w.b.Quit()
+			return false
+		}
+		if im.Data != nil {
+			xl.free(unsafe.Pointer(im.Data))
+		}
+		im.Data = data
+		w.imageBytes = capacity
+	}
+	return true
 }
 
 func (w *xWindow) putImage(x, y int32, width, height uint32) {
@@ -827,7 +939,7 @@ func xValidRGBA(src *image.RGBA) bool {
 }
 
 func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
-	if w.closed || w.img == nil || delta.X != 0 || delta.Y == 0 || !r.In(image.Rect(0, 0, w.width, w.height)) {
+	if w.closed || !w.presented || delta.X != 0 || delta.Y == 0 || !r.In(image.Rect(0, 0, w.width, w.height)) {
 		return false
 	}
 	dst := r.Intersect(r.Add(delta))
@@ -836,7 +948,9 @@ func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
 	}
 	src := dst.Sub(delta)
 	// The GC keeps GraphicsExpose enabled; obscured source pixels trigger repaint.
-	xl.copyArea(w.b.display, w.id, w.id, w.gc, int32(src.Min.X), int32(src.Min.Y), uint32(src.Dx()), uint32(src.Dy()), int32(dst.Min.X), int32(dst.Min.Y))
+	w.putArgs = [10]uintptr{w.b.display, w.id, w.id, w.gc, uintptr(src.Min.X), uintptr(src.Min.Y), uintptr(src.Dx()), uintptr(src.Dy()), uintptr(dst.Min.X), uintptr(dst.Min.Y)}
+	purego.SyscallN(xRaw.copyArea, w.putArgs[:]...)
+	runtime.KeepAlive(w)
 	return true
 }
 
@@ -964,8 +1078,9 @@ func (w *xWindow) dispose(destroy bool) {
 	if w.img != nil {
 		xl.destroyImage(w.img)
 		w.img = nil
-		w.imageBytes = 0
 	}
+	w.releaseShm()
+	w.imageBytes = 0
 	if w.gc != 0 {
 		xl.freeGC(w.b.display, w.gc)
 		w.gc = 0

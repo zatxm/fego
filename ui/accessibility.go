@@ -219,8 +219,8 @@ func (v *view) accessAction(ev fego.Event) {
 			if !e.multiline {
 				value = strings.ReplaceAll(strings.ReplaceAll(value, "\n", ""), "\r", "")
 			}
-			e.anchor = 0
-			e.cursor = utf8.RuneCountInString(e.text)
+			e.own().anchor = 0
+			e.own().cursor = utf8.RuneCountInString(e.text)
 			v.replaceSelection(e, value)
 		case kSlider:
 			n, err := strconv.ParseFloat(ev.Text, 64)
@@ -249,7 +249,7 @@ func (v *view) accessAction(ev fego.Event) {
 		if errA != nil || errB != nil || a < 0 || b < 0 || a > utf8.RuneCountInString(e.text) || b > utf8.RuneCountInString(e.text) {
 			return
 		}
-		e.anchor, e.cursor = a, b
+		e.own().anchor, e.own().cursor = a, b
 		v.focus(e)
 		e.touch(false)
 		v.updateCaret()

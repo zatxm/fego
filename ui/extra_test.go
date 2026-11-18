@@ -2,6 +2,8 @@ package ui
 
 import (
 	"math"
+	"math/big"
+	"math/rand/v2"
 	"testing"
 	"time"
 )
@@ -133,6 +135,29 @@ func TestNumberInputValidationStepAndKeyboard(t *testing.T) {
 	}
 	if input.Input.label != "Opacity" {
 		t.Fatal("number label did not reach text editor")
+	}
+}
+
+func TestDecimalSumMatchesExactRational(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4))
+	values := []float64{0, 1, -1, .1, .2, -.3, 1e-15, 1e308, -math.MaxFloat64, math.MaxFloat64, 5e-324, 123.456, 1e21, -1e-7}
+	for range 20000 {
+		values = append(values, math.Float64frombits(rng.Uint64()), float64(rng.IntN(2000)-1000)/float64(1+rng.IntN(999)))
+	}
+	for i, a := range values {
+		if math.IsNaN(a) || math.IsInf(a, 0) {
+			continue
+		}
+		b := values[(i*7919+13)%len(values)]
+		if math.IsNaN(b) || math.IsInf(b, 0) {
+			continue
+		}
+		x, _ := new(big.Rat).SetString(formatNumber(a))
+		y, _ := new(big.Rat).SetString(formatNumber(b))
+		want, _ := x.Add(x, y).Float64()
+		if got := decimalSum(a, b); got != want || math.Signbit(got) != math.Signbit(want) {
+			t.Fatalf("%v + %v = %v, want %v", a, b, got, want)
+		}
 	}
 }
 

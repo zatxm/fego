@@ -15,7 +15,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 	if old == next {
 		return
 	}
-	clean := !v.needsLayout && len(v.dirty) == 0 && v.img != nil
+	clean := !v.needsLayout && len(v.dirty) == 0 && !v.size.Empty()
 	e.scroll = next
 	localLayout := clean && e.scrollable && len(e.children) == 1 && !e.children[0].hidden
 	exactShift := true
@@ -46,7 +46,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 	r.Max.Y -= margin
 	r.Min.Y = max(r.Min.Y, int(math.Ceil(float64((e.rect.Y+e.headerHeight())*v.scale)))+margin)
 	r.Max.X = min(r.Max.X, int(math.Floor(float64((e.rect.X+e.rect.W-9)*v.scale))))
-	r = r.Intersect(e.clip.pixels(v.scale)).Intersect(v.img.Rect)
+	r = r.Intersect(e.clip.pixels(v.scale)).Intersect(v.size)
 	if r.Empty() || math.Abs(float64(delta)) >= float64(r.Dy()) || delta == 0 {
 		return
 	}

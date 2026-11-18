@@ -2,7 +2,6 @@ package ui
 
 import (
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 )
@@ -31,7 +30,7 @@ func Tabs(tabs ...Tab) *TabView {
 				}
 			}
 		})
-		button.tab = true
+		button.own().tab = true
 		t.buttons = append(t.buttons, button)
 		t.pages = append(t.pages, tab.Content)
 		bar.Append(button)
@@ -47,16 +46,16 @@ func (t *TabView) SetSelected(index int) *TabView {
 	if index < 0 || index >= len(t.pages) {
 		panic("ui: tab selection outside pages")
 	}
-	t.selected = index
+	t.own().selected = index
 	for i, page := range t.pages {
 		page.Hidden(i != index)
-		t.buttons[i].primary = i == index
+		t.buttons[i].own().primary = i == index
 		t.buttons[i].touch(false)
 	}
 	return t
 }
 
-func (t *TabView) OnSelect(fn func(int)) *TabView { t.onSelect = fn; return t }
+func (t *TabView) OnSelect(fn func(int)) *TabView { t.own().onSelect = fn; return t }
 
 // Segments is a mutually exclusive group of ordinary keyboard-focusable buttons.
 type Segments struct {
@@ -76,7 +75,7 @@ func Segmented(options []string, selected int) *Segments {
 				}
 			}
 		}).Radius(6)
-		button.tab = true
+		button.own().tab = true
 		s.buttons = append(s.buttons, button)
 	}
 	s.Children(s.buttons...)
@@ -90,15 +89,15 @@ func (s *Segments) SetSelected(index int) *Segments {
 	if index < -1 || index >= len(s.buttons) {
 		panic("ui: segment selection outside options")
 	}
-	s.selected = index
+	s.own().selected = index
 	for i, button := range s.buttons {
-		button.primary = i == index
+		button.own().primary = i == index
 		button.touch(false)
 	}
 	return s
 }
 
-func (s *Segments) OnSelect(fn func(int)) *Segments { s.onSelect = fn; return s }
+func (s *Segments) OnSelect(fn func(int)) *Segments { s.own().onSelect = fn; return s }
 
 type Section struct {
 	Title   string
@@ -267,37 +266,75 @@ func Markdown(source string, onLink func(string)) *Element {
 	return root
 }
 
-var markdownInline = regexp.MustCompile("\\*\\*([^*\n]+)\\*\\*|`([^`\n]+)`|\\[([^\\]\n]+)\\]\\(([^)\n]*)\\)")
-
 func markdownSpans(text string) []Span {
 	var spans []Span
 	last := 0
-	// Go's RE2 matcher keeps malformed delimiter-heavy input linear in size.
-	for _, match := range markdownInline.FindAllStringSubmatchIndex(text, -1) {
-		if match[0] > last {
-			spans = append(spans, Span{Text: text[last:match[0]]})
+	var m markdownScanner
+	for i := 0; i < len(text); {
+		end, span, ok := m.match(text, i)
+		if !ok {
+			i++
+			continue
 		}
-		var span Span
-		switch {
-		case match[2] >= 0:
-			span = Span{Text: text[match[2]:match[3]], Bold: true}
-		case match[4] >= 0:
-			span = Span{Text: text[match[4]:match[5]], Bold: true}
-		default:
-			span.Text = text[match[6]:match[7]]
-			target := text[match[8]:match[9]]
-			if u, err := url.Parse(target); err == nil {
-				switch strings.ToLower(u.Scheme) {
-				case "http", "https", "mailto":
-					span.Link = target
-				}
-			}
+		if i > last {
+			spans = append(spans, Span{Text: text[last:i]})
 		}
 		spans = append(spans, span)
-		last = match[1]
+		last, i = end, end
 	}
 	if last < len(text) {
 		spans = append(spans, Span{Text: text[last:]})
 	}
 	return spans
+}
+
+// markdownScanner finds **bold**, `code` and [label](target) with regexp's
+// leftmost-first results. Each form ends at its delimiter or a newline; caching
+// the next delimiter keeps delimiter-heavy malformed input linear in size.
+type markdownScanner struct{ star, tick, bracket, paren int }
+
+func (m *markdownScanner) match(text string, i int) (int, Span, bool) {
+	switch text[i] {
+	case '*':
+		if i+1 < len(text) && text[i+1] == '*' {
+			c := nextDelimiter(text, i+2, &m.star, "*\n")
+			if c > i+2 && c+1 < len(text) && text[c] == '*' && text[c+1] == '*' {
+				return c + 2, Span{Text: text[i+2 : c], Bold: true}, true
+			}
+		}
+	case '`':
+		c := nextDelimiter(text, i+1, &m.tick, "`\n")
+		if c > i+1 && c < len(text) && text[c] == '`' {
+			return c + 1, Span{Text: text[i+1 : c], Bold: true}, true
+		}
+	case '[':
+		c := nextDelimiter(text, i+1, &m.bracket, "]\n")
+		if c > i+1 && c+1 < len(text) && text[c] == ']' && text[c+1] == '(' {
+			d := nextDelimiter(text, c+2, &m.paren, ")\n")
+			if d < len(text) && text[d] == ')' {
+				span := Span{Text: text[i+1 : c]}
+				target := text[c+2 : d]
+				if u, err := url.Parse(target); err == nil {
+					switch strings.ToLower(u.Scheme) {
+					case "http", "https", "mailto":
+						span.Link = target
+					}
+				}
+				return d + 1, span, true
+			}
+		}
+	}
+	return 0, Span{}, false
+}
+
+// nextDelimiter returns the first index at or after from holding one of chars,
+// or len(text). Queries for one cache never move backward.
+func nextDelimiter(text string, from int, cached *int, chars string) int {
+	if *cached < from {
+		*cached = len(text)
+		if j := strings.IndexAny(text[from:], chars); j >= 0 {
+			*cached = from + j
+		}
+	}
+	return *cached
 }

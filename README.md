@@ -22,7 +22,7 @@ fego provides windows, layouts, forms, data views, text editing, and light and d
 
 CI runs native window tests on Linux amd64, Windows amd64, and macOS arm64. Other targets are checked through cross-compilation.
 
-Linux requires X11 or XWayland at runtime. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
+Linux requires X11 or XWayland at runtime; when `libXext` and a local server provide MIT-SHM, window updates use shared memory and otherwise fall back to regular uploads. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
 
 ## Quick start
 
@@ -110,7 +110,7 @@ Layout dimensions use logical pixels. `FillWidth` and `FillHeight` fill their re
 
 Composite widgets such as `Tabs`, `DatePicker`, `NumberInput`, `ComboBox`, and charts expose `.Element` for placement in layouts. Set dimensions with methods such as `.Element.Width(...)`, and keep the original object to update values through its dedicated methods. `Badge` and `Avatar` are static decorations; replace the node to change their content.
 
-Lists, tables, and trees draw only visible rows. Call `Refresh` after changing list contents, and `SetCount` when its row count changes. Use `SetRows` to update table data. These widgets reuse scroll regions where possible to reduce repainting.
+Lists, tables, and trees draw only visible rows. Call `Refresh` after changing list contents, and `SetCount` when its row count changes. Use `SetRows` to update table data. These widgets reuse scroll regions where possible to reduce repainting. On Linux the X server retains window pixels, so fego paints only damaged regions through a bounded scratch band instead of keeping a full-window client image.
 
 ## Text and accessibility
 

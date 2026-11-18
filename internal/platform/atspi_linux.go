@@ -3,11 +3,11 @@
 package platform
 
 import (
-	"context"
 	"fmt"
 	"image"
 	"math"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,20 +15,17 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"github.com/godbus/dbus/v5"
-	"github.com/godbus/dbus/v5/introspect"
 )
 
 const atspiPrefix = "org.a11y.atspi."
-const atspiBase dbus.ObjectPath = "/org/a11y/atspi/accessible"
-const atspiRoot dbus.ObjectPath = "/org/a11y/atspi/accessible/root"
+const atspiBase dbusPath = "/org/a11y/atspi/accessible"
+const atspiRoot dbusPath = "/org/a11y/atspi/accessible/root"
 const atspiWindow = ^uint64(0)
-const atspiRegistryPath dbus.ObjectPath = "/org/a11y/atspi/registry"
+const atspiRegistryPath dbusPath = "/org/a11y/atspi/registry"
 
 type atspiRef struct {
 	Bus  string
-	Path dbus.ObjectPath
+	Path dbusPath
 }
 type atspiRect struct{ X, Y, Width, Height int32 }
 type atspiRelation struct {
@@ -67,7 +64,8 @@ type atspiTree struct {
 type atspiSubscriptions struct{ events map[string]bool }
 
 type atspiBridge struct {
-	conn      *dbus.Conn
+	conn      *dbusConn
+	stop      chan struct{}
 	name      string
 	tree      atomic.Pointer[atspiTree]
 	desktop   atomic.Pointer[atspiRef]
@@ -77,6 +75,18 @@ type atspiBridge struct {
 	queue     []Event
 	closed    bool
 	wake      func()
+	// Without event listeners, frames only replace pending nodes; queries
+	// publish them on demand instead of rebuilding a snapshot every frame.
+	publishMu sync.Mutex
+	pending   atspiPending
+	dirty     atomic.Bool
+}
+
+type atspiPending struct {
+	title  string
+	bounds image.Rectangle
+	origin image.Point
+	nodes  []AccessNode
 }
 
 // Discovery never starts a session or accessibility bus for an ordinary window.
@@ -87,91 +97,104 @@ func atspiAddress() string {
 	if os.Getenv("DBUS_SESSION_BUS_ADDRESS") == "" {
 		return ""
 	}
-	c, err := dbus.SessionBusPrivateNoAutoStartup()
+	c, err := dbusConnect(os.Getenv("DBUS_SESSION_BUS_ADDRESS"))
 	if err != nil {
 		return ""
 	}
 	defer c.Close()
-	if c.Auth(nil) != nil || c.Hello() != nil {
+	reply, err := c.call(250*time.Millisecond, "org.freedesktop.DBus", "/org/freedesktop/DBus", "org.freedesktop.DBus", "NameHasOwner", 0, "org.a11y.Bus")
+	if err != nil || len(reply) != 1 || reply[0] != true {
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
-	defer cancel()
-	var active bool
-	if c.BusObject().CallWithContext(ctx, "org.freedesktop.DBus.NameHasOwner", 0, "org.a11y.Bus").Store(&active) != nil || !active {
+	reply, err = c.call(250*time.Millisecond, "org.a11y.Bus", "/org/a11y/bus", "org.a11y.Bus", "GetAddress", dbusNoAutoStart)
+	if err != nil || len(reply) != 1 {
 		return ""
 	}
-	var address string
-	_ = c.Object("org.a11y.Bus", "/org/a11y/bus").CallWithContext(ctx, "org.a11y.Bus.GetAddress", dbus.FlagNoAutoStart).Store(&address)
+	address, _ := reply[0].(string)
 	return address
 }
 
 func newATSPI(address, title string, bounds image.Rectangle, wake func()) (*atspiBridge, error) {
-	c, err := dbus.Connect(address)
+	c, err := dbusConnect(address)
 	if err != nil {
 		return nil, err
 	}
-	a := &atspiBridge{conn: c, name: c.Names()[0], wake: wake}
+	a := &atspiBridge{conn: c, name: c.name, wake: wake, stop: make(chan struct{})}
 	a.update(title, bounds, image.Point{}, nil)
-	for name, object := range a.objects() {
-		if err := c.ExportSubtree(object, atspiBase, name); err != nil {
-			c.Close()
-			return nil, err
+	objects := a.objects()
+	objects["org.freedesktop.DBus.Introspectable"] = atspiIntrospection{a}
+	c.Export(atspiBase, objects)
+	// The registry may start on an already-running accessibility bus.
+	reply, err := c.call(400*time.Millisecond, atspiPrefix+"Registry", atspiRoot, atspiPrefix+"Socket", "Embed", 0, a.ref(0))
+	if err == nil && len(reply) == 1 {
+		if desktop, ok := atspiRefOf(reply[0]); ok {
+			a.desktop.Store(&desktop)
 		}
 	}
-	if err := c.ExportSubtree(atspiIntrospection{a}, atspiBase, "org.freedesktop.DBus.Introspectable"); err != nil {
-		c.Close()
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-	defer cancel()
-	var desktop atspiRef
-	// The registry may start on an already-running accessibility bus.
-	if err := c.Object(atspiPrefix+"Registry", atspiRoot).CallWithContext(ctx, atspiPrefix+"Socket.Embed", 0, a.ref(0)).Store(&desktop); err == nil {
-		a.desktop.Store(&desktop)
-	}
 	if err := a.watchSubscriptions(); err != nil {
-		c.Close()
+		a.close()
 		return nil, err
 	}
 	return a, nil
 }
 
+func atspiRefOf(v any) (atspiRef, bool) {
+	fields, ok := v.([]any)
+	if !ok || len(fields) != 2 {
+		return atspiRef{}, false
+	}
+	bus, ok1 := fields[0].(string)
+	path, ok2 := fields[1].(dbusPath)
+	return atspiRef{bus, path}, ok1 && ok2
+}
+
 // Registry subscriptions, unlike D-Bus match rules, identify actual assistive
 // technology interest. Keep the query tree live even when no events are needed.
 func (a *atspiBridge) watchSubscriptions() error {
-	signals := make(chan *dbus.Signal, 32)
-	a.conn.Signal(signals)
-	if err := a.conn.AddMatchSignal(dbus.WithMatchSender(atspiPrefix+"Registry"), dbus.WithMatchObjectPath(atspiRegistryPath), dbus.WithMatchInterface(atspiPrefix+"Registry")); err != nil {
-		a.conn.RemoveSignal(signals)
+	changed := make(chan struct{}, 1)
+	onSignal := func(m *dbusMessage) {
+		if m.iface == atspiPrefix+"Registry" && (m.member == "EventListenerRegistered" || m.member == "EventListenerDeregistered") || m.iface == "org.freedesktop.DBus" && m.member == "NameOwnerChanged" {
+			// The reader goroutine must not wait for a reply; refresh elsewhere.
+			select {
+			case changed <- struct{}{}:
+			default:
+			}
+		}
+	}
+	a.conn.onSignal.Store(&onSignal)
+	if err := a.conn.AddMatch("type='signal',sender='" + atspiPrefix + "Registry',path='" + string(atspiRegistryPath) + "',interface='" + atspiPrefix + "Registry'"); err != nil {
 		return err
 	}
-	if err := a.conn.AddMatchSignal(dbus.WithMatchSender("org.freedesktop.DBus"), dbus.WithMatchInterface("org.freedesktop.DBus"), dbus.WithMatchMember("NameOwnerChanged"), dbus.WithMatchArg(0, atspiPrefix+"Registry")); err != nil {
-		a.conn.RemoveSignal(signals)
+	if err := a.conn.AddMatch("type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='" + atspiPrefix + "Registry'"); err != nil {
 		return err
 	}
 	// Subscribe before the initial query so a registration cannot be lost between them.
 	a.refreshSubscriptions()
 	go func() {
-		for signal := range signals {
-			if signal.Name == atspiPrefix+"Registry.EventListenerRegistered" || signal.Name == atspiPrefix+"Registry.EventListenerDeregistered" || signal.Name == "org.freedesktop.DBus.NameOwnerChanged" {
+		for {
+			select {
+			case <-changed:
 				// Re-querying preserves application-specific registration filters and handles
 				// listener disconnection, duplicate registration and deregistration prefixes.
 				a.refreshSubscriptions()
+			case <-a.stop:
+				return
 			}
 		}
 	}()
 	return nil
 }
 func (a *atspiBridge) refreshSubscriptions() {
-	var registrations []struct{ Bus, Event string }
-	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
-	defer cancel()
-	call := a.conn.Object(atspiPrefix+"Registry", atspiRegistryPath).CallWithContext(ctx, atspiPrefix+"Registry.GetRegisteredEvents", dbus.FlagNoAutoStart)
+	reply, err := a.conn.call(400*time.Millisecond, atspiPrefix+"Registry", atspiRegistryPath, atspiPrefix+"Registry", "GetRegisteredEvents", dbusNoAutoStart)
 	subscriptions := &atspiSubscriptions{events: make(map[string]bool)}
-	if call.Store(&registrations) == nil {
+	if err == nil && len(reply) == 1 {
+		registrations, _ := reply[0].([]any)
 		for _, registration := range registrations {
-			subscriptions.events[atspiEventName(registration.Event)] = true
+			if fields, ok := registration.([]any); ok && len(fields) == 2 {
+				if event, ok := fields[1].(string); ok {
+					subscriptions.events[atspiEventName(event)] = true
+				}
+			}
 		}
 	}
 	a.listeners.Store(subscriptions)
@@ -217,18 +240,18 @@ func (a *atspiBridge) objects() map[string]any {
 	}
 }
 func (a *atspiBridge) ref(id uint64) atspiRef {
-	path := dbus.ObjectPath(string(atspiBase) + "/n" + strconv.FormatUint(id, 10))
+	path := dbusPath(string(atspiBase) + "/n" + strconv.FormatUint(id, 10))
 	if id == 0 {
 		path = atspiRoot
 	}
 	return atspiRef{a.name, path}
 }
 func atspiNull() atspiRef { return atspiRef{"", "/org/a11y/atspi/null"} }
-func atspiError(s string) *dbus.Error {
-	return dbus.NewError("org.freedesktop.DBus.Error.InvalidArgs", []any{s})
+func atspiError(s string) *dbusError {
+	return &dbusError{"org.freedesktop.DBus.Error.InvalidArgs", s}
 }
-func (a *atspiBridge) lookup(msg dbus.Message) (*atspiTree, AccessNode, *dbus.Error) {
-	path, _ := msg.Headers[dbus.FieldPath].Value().(dbus.ObjectPath)
+func (a *atspiBridge) lookup(msg *dbusMessage) (*atspiTree, AccessNode, *dbusError) {
+	path := msg.path
 	var id uint64
 	var err error
 	if path != atspiRoot {
@@ -238,7 +261,7 @@ func (a *atspiBridge) lookup(msg dbus.Message) (*atspiTree, AccessNode, *dbus.Er
 		}
 		id, err = strconv.ParseUint(s, 10, 64)
 	}
-	t := a.tree.Load()
+	t := a.current()
 	n, ok := t.node(id)
 	if err != nil || !ok {
 		return nil, AccessNode{}, atspiError("defunct accessible")
@@ -274,13 +297,16 @@ func (a *atspiBridge) drain(emit func(Event)) {
 	a.queue = nil
 	a.mu.Unlock()
 	for _, e := range queue {
-		if n, ok := a.tree.Load().node(e.AccessID); ok && !n.Disabled {
+		if n, ok := a.current().node(e.AccessID); ok && !n.Disabled {
 			emit(e)
 		}
 	}
 }
 func (a *atspiBridge) close() {
 	a.mu.Lock()
+	if !a.closed {
+		close(a.stop)
+	}
 	a.closed = true
 	a.queue = nil
 	a.mu.Unlock()
@@ -290,8 +316,40 @@ func (a *atspiBridge) signal(id uint64, name, detail string, arg1, arg2 int32, v
 	if !a.wants(name, detail) {
 		return
 	}
-	_ = a.conn.Emit(a.ref(id).Path, atspiPrefix+"Event.Object."+name, detail, arg1, arg2, dbus.MakeVariant(value), map[string]dbus.Variant{})
+	_ = a.conn.Emit(a.ref(id).Path, atspiPrefix+"Event.Object", name, detail, arg1, arg2, dbusMakeVariant(value), map[string]dbusVariant{})
 }
+
+// set accepts borrowed nodes from the UI thread.
+func (a *atspiBridge) set(title string, bounds image.Rectangle, origin image.Point, nodes []AccessNode) {
+	a.publishMu.Lock()
+	defer a.publishMu.Unlock()
+	if s := a.listeners.Load(); s != nil && len(s.events) > 0 {
+		// Event diffs must follow every change in order.
+		a.dirty.Store(false)
+		a.update(title, bounds, origin, nodes)
+		return
+	}
+	p := &a.pending
+	p.title, p.bounds, p.origin = title, bounds, origin
+	clear(p.nodes)
+	p.nodes = append(p.nodes[:0], nodes...)
+	a.dirty.Store(true)
+}
+
+// current returns the latest snapshot, publishing pending nodes first.
+func (a *atspiBridge) current() *atspiTree {
+	if a.dirty.Load() {
+		a.publishMu.Lock()
+		if a.dirty.Load() {
+			p := &a.pending
+			a.update(p.title, p.bounds, p.origin, p.nodes)
+			a.dirty.Store(false)
+		}
+		a.publishMu.Unlock()
+	}
+	return a.tree.Load()
+}
+
 func (a *atspiBridge) update(title string, bounds image.Rectangle, origin image.Point, nodes []AccessNode) {
 	old := a.tree.Load()
 	stable := old != nil && len(old.nodes) == len(nodes)+2
@@ -610,7 +668,7 @@ func atspiStates(n AccessNode) []uint32 {
 
 type atspiAccessible struct{ a *atspiBridge }
 
-func (o atspiAccessible) GetChildren(m dbus.Message) ([]atspiRef, *dbus.Error) {
+func (o atspiAccessible) GetChildren(m *dbusMessage) ([]atspiRef, *dbusError) {
 	t, n, e := o.a.lookup(m)
 	if e != nil {
 		return nil, e
@@ -621,7 +679,7 @@ func (o atspiAccessible) GetChildren(m dbus.Message) ([]atspiRef, *dbus.Error) {
 	}
 	return r, nil
 }
-func (o atspiAccessible) GetChildAtIndex(m dbus.Message, index int32) (atspiRef, *dbus.Error) {
+func (o atspiAccessible) GetChildAtIndex(m *dbusMessage, index int32) (atspiRef, *dbusError) {
 	r, e := o.GetChildren(m)
 	if e != nil {
 		return atspiNull(), e
@@ -631,48 +689,48 @@ func (o atspiAccessible) GetChildAtIndex(m dbus.Message, index int32) (atspiRef,
 	}
 	return r[index], nil
 }
-func (o atspiAccessible) GetIndexInParent(m dbus.Message) (int32, *dbus.Error) {
+func (o atspiAccessible) GetIndexInParent(m *dbusMessage) (int32, *dbusError) {
 	t, n, e := o.a.lookup(m)
 	if e != nil {
 		return -1, e
 	}
 	return atspiIndex(t, n), nil
 }
-func (o atspiAccessible) GetRelationSet(m dbus.Message) ([]atspiRelation, *dbus.Error) {
+func (o atspiAccessible) GetRelationSet(m *dbusMessage) ([]atspiRelation, *dbusError) {
 	_, _, e := o.a.lookup(m)
 	return []atspiRelation{}, e
 }
-func (o atspiAccessible) GetRole(m dbus.Message) (uint32, *dbus.Error) {
+func (o atspiAccessible) GetRole(m *dbusMessage) (uint32, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	return atspiRole(n.Role), e
 }
-func (o atspiAccessible) GetRoleName(m dbus.Message) (string, *dbus.Error) {
+func (o atspiAccessible) GetRoleName(m *dbusMessage) (string, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	return n.Role, e
 }
-func (o atspiAccessible) GetLocalizedRoleName(m dbus.Message) (string, *dbus.Error) {
+func (o atspiAccessible) GetLocalizedRoleName(m *dbusMessage) (string, *dbusError) {
 	return o.GetRoleName(m)
 }
-func (o atspiAccessible) GetState(m dbus.Message) ([]uint32, *dbus.Error) {
+func (o atspiAccessible) GetState(m *dbusMessage) ([]uint32, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	return atspiStates(n), e
 }
-func (o atspiAccessible) GetAttributes(m dbus.Message) (map[string]string, *dbus.Error) {
+func (o atspiAccessible) GetAttributes(m *dbusMessage) (map[string]string, *dbusError) {
 	_, _, e := o.a.lookup(m)
 	return map[string]string{"toolkit": "fego"}, e
 }
-func (o atspiAccessible) GetApplication(m dbus.Message) (atspiRef, *dbus.Error) {
+func (o atspiAccessible) GetApplication(m *dbusMessage) (atspiRef, *dbusError) {
 	_, _, e := o.a.lookup(m)
 	return o.a.ref(0), e
 }
-func (o atspiAccessible) GetInterfaces(m dbus.Message) ([]string, *dbus.Error) {
+func (o atspiAccessible) GetInterfaces(m *dbusMessage) ([]string, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	return atspiInterfaces(n), e
 }
 
 type atspiComponent struct{ a *atspiBridge }
 
-func atspiBounds(t *atspiTree, n AccessNode, coord uint32) (image.Rectangle, *dbus.Error) {
+func atspiBounds(t *atspiTree, n AccessNode, coord uint32) (image.Rectangle, *dbusError) {
 	r := n.Bounds
 	switch coord {
 	case 0:
@@ -686,7 +744,7 @@ func atspiBounds(t *atspiTree, n AccessNode, coord uint32) (image.Rectangle, *db
 	}
 	return r, nil
 }
-func (o atspiComponent) GetExtents(m dbus.Message, coord uint32) (atspiRect, *dbus.Error) {
+func (o atspiComponent) GetExtents(m *dbusMessage, coord uint32) (atspiRect, *dbusError) {
 	t, n, e := o.a.lookup(m)
 	if e != nil {
 		return atspiRect{}, e
@@ -694,19 +752,19 @@ func (o atspiComponent) GetExtents(m dbus.Message, coord uint32) (atspiRect, *db
 	r, e := atspiBounds(t, n, coord)
 	return atspiRect{int32(r.Min.X), int32(r.Min.Y), int32(r.Dx()), int32(r.Dy())}, e
 }
-func (o atspiComponent) GetPosition(m dbus.Message, coord uint32) (int32, int32, *dbus.Error) {
+func (o atspiComponent) GetPosition(m *dbusMessage, coord uint32) (int32, int32, *dbusError) {
 	r, e := o.GetExtents(m, coord)
 	return r.X, r.Y, e
 }
-func (o atspiComponent) GetSize(m dbus.Message) (int32, int32, *dbus.Error) {
+func (o atspiComponent) GetSize(m *dbusMessage) (int32, int32, *dbusError) {
 	r, e := o.GetExtents(m, 1)
 	return r.Width, r.Height, e
 }
-func (o atspiComponent) Contains(m dbus.Message, x, y int32, coord uint32) (bool, *dbus.Error) {
+func (o atspiComponent) Contains(m *dbusMessage, x, y int32, coord uint32) (bool, *dbusError) {
 	r, e := o.GetExtents(m, coord)
 	return x >= r.X && x < r.X+r.Width && y >= r.Y && y < r.Y+r.Height, e
 }
-func (o atspiComponent) GetAccessibleAtPoint(m dbus.Message, x, y int32, coord uint32) (atspiRef, *dbus.Error) {
+func (o atspiComponent) GetAccessibleAtPoint(m *dbusMessage, x, y int32, coord uint32) (atspiRef, *dbusError) {
 	t, n, e := o.a.lookup(m)
 	if e != nil {
 		return atspiNull(), e
@@ -728,32 +786,32 @@ func (o atspiComponent) GetAccessibleAtPoint(m dbus.Message, x, y int32, coord u
 	}
 	return o.a.ref(result), nil
 }
-func (o atspiComponent) GrabFocus(m dbus.Message) (bool, *dbus.Error) {
+func (o atspiComponent) GrabFocus(m *dbusMessage) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
 	}
 	return o.a.action(n, "focus", ""), nil
 }
-func (o atspiComponent) GetLayer(m dbus.Message) (uint32, *dbus.Error) {
+func (o atspiComponent) GetLayer(m *dbusMessage) (uint32, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if n.ID == atspiWindow {
 		return 7, e
 	}
 	return 3, e
 }
-func (o atspiComponent) GetMDIZOrder(m dbus.Message) (int16, *dbus.Error) {
+func (o atspiComponent) GetMDIZOrder(m *dbusMessage) (int16, *dbusError) {
 	_, _, e := o.a.lookup(m)
 	return -1, e
 }
-func (o atspiComponent) GetAlpha(m dbus.Message) (float64, *dbus.Error) {
+func (o atspiComponent) GetAlpha(m *dbusMessage) (float64, *dbusError) {
 	_, _, e := o.a.lookup(m)
 	return 1, e
 }
 
 type atspiAction struct{ a *atspiBridge }
 
-func (o atspiAction) GetName(m dbus.Message, i int32) (string, *dbus.Error) {
+func (o atspiAction) GetName(m *dbusMessage, i int32) (string, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return "", e
@@ -763,17 +821,17 @@ func (o atspiAction) GetName(m dbus.Message, i int32) (string, *dbus.Error) {
 	}
 	return "press", nil
 }
-func (o atspiAction) GetLocalizedName(m dbus.Message, i int32) (string, *dbus.Error) {
+func (o atspiAction) GetLocalizedName(m *dbusMessage, i int32) (string, *dbusError) {
 	return o.GetName(m, i)
 }
-func (o atspiAction) GetDescription(m dbus.Message, i int32) (string, *dbus.Error) {
+func (o atspiAction) GetDescription(m *dbusMessage, i int32) (string, *dbusError) {
 	return o.GetName(m, i)
 }
-func (o atspiAction) GetKeyBinding(m dbus.Message, i int32) (string, *dbus.Error) {
+func (o atspiAction) GetKeyBinding(m *dbusMessage, i int32) (string, *dbusError) {
 	_, e := o.GetName(m, i)
 	return "", e
 }
-func (o atspiAction) GetActions(m dbus.Message) ([]atspiActionInfo, *dbus.Error) {
+func (o atspiAction) GetActions(m *dbusMessage) ([]atspiActionInfo, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return nil, e
@@ -783,7 +841,7 @@ func (o atspiAction) GetActions(m dbus.Message) ([]atspiActionInfo, *dbus.Error)
 	}
 	return []atspiActionInfo{{"press", "press", ""}}, nil
 }
-func (o atspiAction) DoAction(m dbus.Message, i int32) (bool, *dbus.Error) {
+func (o atspiAction) DoAction(m *dbusMessage, i int32) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
@@ -796,8 +854,8 @@ func (o atspiAction) DoAction(m dbus.Message, i int32) (bool, *dbus.Error) {
 
 type atspiApplication struct{ a *atspiBridge }
 
-func (o atspiApplication) GetLocale(_ uint32) (string, *dbus.Error)        { return atspiLocale(), nil }
-func (o atspiApplication) GetApplicationBusAddress() (string, *dbus.Error) { return "", nil }
+func (o atspiApplication) GetLocale(_ uint32) (string, *dbusError)        { return atspiLocale(), nil }
+func (o atspiApplication) GetApplicationBusAddress() (string, *dbusError) { return "", nil }
 func atspiLocale() string {
 	for _, k := range []string{"LC_ALL", "LC_MESSAGES", "LANG"} {
 		if s := os.Getenv(k); s != "" {
@@ -809,7 +867,7 @@ func atspiLocale() string {
 
 type atspiProperties struct{ a *atspiBridge }
 
-func (o atspiProperties) values(m dbus.Message, iface string) (map[string]dbus.Variant, *dbus.Error) {
+func (o atspiProperties) values(m *dbusMessage, iface string) (map[string]dbusVariant, *dbusError) {
 	t, n, e := o.a.lookup(m)
 	if e != nil {
 		return nil, e
@@ -859,33 +917,33 @@ func (o atspiProperties) values(m dbus.Message, iface string) (map[string]dbus.V
 	default:
 		return nil, atspiError("unknown interface")
 	}
-	r := make(map[string]dbus.Variant, len(values))
+	r := make(map[string]dbusVariant, len(values))
 	for k, v := range values {
-		r[k] = dbus.MakeVariant(v)
+		r[k] = dbusMakeVariant(v)
 	}
 	return r, nil
 }
-func (o atspiProperties) Get(m dbus.Message, iface, name string) (dbus.Variant, *dbus.Error) {
+func (o atspiProperties) Get(m *dbusMessage, iface, name string) (dbusVariant, *dbusError) {
 	v, e := o.values(m, iface)
 	if e != nil {
-		return dbus.MakeVariant(""), e
+		return dbusMakeVariant(""), e
 	}
 	r, ok := v[name]
 	if !ok {
-		return dbus.MakeVariant(""), atspiError("unknown property")
+		return dbusMakeVariant(""), atspiError("unknown property")
 	}
 	return r, nil
 }
-func (o atspiProperties) GetAll(m dbus.Message, iface string) (map[string]dbus.Variant, *dbus.Error) {
+func (o atspiProperties) GetAll(m *dbusMessage, iface string) (map[string]dbusVariant, *dbusError) {
 	return o.values(m, iface)
 }
-func (o atspiProperties) Set(m dbus.Message, iface, name string, value dbus.Variant) *dbus.Error {
+func (o atspiProperties) Set(m *dbusMessage, iface, name string, value dbusVariant) *dbusError {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return e
 	}
 	if n.ID == 0 && iface == atspiPrefix+"Application" && name == "Id" {
-		v, ok := value.Value().(int32)
+		v, ok := value.value.(int32)
 		if !ok {
 			return atspiError("id must be int32")
 		}
@@ -893,7 +951,7 @@ func (o atspiProperties) Set(m dbus.Message, iface, name string, value dbus.Vari
 		return nil
 	}
 	if iface == atspiPrefix+"Value" && name == "CurrentValue" && atspiHasValue(n) && n.Role != "progress" {
-		v, ok := value.Value().(float64)
+		v, ok := value.value.(float64)
 		if !ok || math.IsNaN(v) || math.IsInf(v, 0) || v < n.Min || v > n.Max {
 			return atspiError("value outside range")
 		}
@@ -902,7 +960,7 @@ func (o atspiProperties) Set(m dbus.Message, iface, name string, value dbus.Vari
 		}
 		return atspiError("value unavailable")
 	}
-	return dbus.NewError("org.freedesktop.DBus.Error.PropertyReadOnly", []any{"property is read only"})
+	return &dbusError{"org.freedesktop.DBus.Error.PropertyReadOnly", "property is read only"}
 }
 
 type atspiText struct{ a *atspiBridge }
@@ -913,7 +971,7 @@ func atspiTextValue(n AccessNode) string {
 	}
 	return n.Label
 }
-func (o atspiText) runes(m dbus.Message) ([]rune, *dbus.Error) {
+func (o atspiText) runes(m *dbusMessage) ([]rune, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return nil, e
@@ -923,7 +981,7 @@ func (o atspiText) runes(m dbus.Message) ([]rune, *dbus.Error) {
 	}
 	return []rune(atspiTextValue(n)), nil
 }
-func (o atspiText) GetText(m dbus.Message, start, end int32) (string, *dbus.Error) {
+func (o atspiText) GetText(m *dbusMessage, start, end int32) (string, *dbusError) {
 	r, e := o.runes(m)
 	if e != nil {
 		return "", e
@@ -936,7 +994,7 @@ func (o atspiText) GetText(m dbus.Message, start, end int32) (string, *dbus.Erro
 	}
 	return string(r[start:end]), nil
 }
-func (o atspiText) GetCharacterAtOffset(m dbus.Message, offset int32) (int32, *dbus.Error) {
+func (o atspiText) GetCharacterAtOffset(m *dbusMessage, offset int32) (int32, *dbusError) {
 	r, e := o.runes(m)
 	if e != nil {
 		return 0, e
@@ -946,7 +1004,7 @@ func (o atspiText) GetCharacterAtOffset(m dbus.Message, offset int32) (int32, *d
 	}
 	return r[offset], nil
 }
-func (o atspiText) GetStringAtOffset(m dbus.Message, offset int32, granularity uint32) (string, int32, int32, *dbus.Error) {
+func (o atspiText) GetStringAtOffset(m *dbusMessage, offset int32, granularity uint32) (string, int32, int32, *dbusError) {
 	r, e := o.runes(m)
 	if e != nil {
 		return "", 0, 0, e
@@ -977,14 +1035,14 @@ func (o atspiText) GetStringAtOffset(m dbus.Message, offset int32, granularity u
 	}
 	return string(r[start:end]), int32(start), int32(end), nil
 }
-func (o atspiText) GetNSelections(m dbus.Message) (int32, *dbus.Error) {
+func (o atspiText) GetNSelections(m *dbusMessage) (int32, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if n.SelectionStart != n.SelectionEnd {
 		return 1, e
 	}
 	return 0, e
 }
-func (o atspiText) GetSelection(m dbus.Message, index int32) (int32, int32, *dbus.Error) {
+func (o atspiText) GetSelection(m *dbusMessage, index int32) (int32, int32, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return 0, 0, e
@@ -994,7 +1052,7 @@ func (o atspiText) GetSelection(m dbus.Message, index int32) (int32, int32, *dbu
 	}
 	return int32(n.SelectionStart), int32(n.SelectionEnd), nil
 }
-func (o atspiText) SetCaretOffset(m dbus.Message, offset int32) (bool, *dbus.Error) {
+func (o atspiText) SetCaretOffset(m *dbusMessage, offset int32) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
@@ -1004,7 +1062,7 @@ func (o atspiText) SetCaretOffset(m dbus.Message, offset int32) (bool, *dbus.Err
 	}
 	return o.a.action(n, "setCaret", strconv.FormatInt(int64(offset), 10)), nil
 }
-func (o atspiText) SetSelection(m dbus.Message, index, start, end int32) (bool, *dbus.Error) {
+func (o atspiText) SetSelection(m *dbusMessage, index, start, end int32) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
@@ -1014,41 +1072,41 @@ func (o atspiText) SetSelection(m dbus.Message, index, start, end int32) (bool, 
 	}
 	return o.a.action(n, "setSelection", fmt.Sprintf("%d:%d", start, end)), nil
 }
-func (o atspiText) AddSelection(m dbus.Message, start, end int32) (bool, *dbus.Error) {
+func (o atspiText) AddSelection(m *dbusMessage, start, end int32) (bool, *dbusError) {
 	return o.SetSelection(m, 0, start, end)
 }
-func (o atspiText) RemoveSelection(m dbus.Message, index int32) (bool, *dbus.Error) {
+func (o atspiText) RemoveSelection(m *dbusMessage, index int32) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
 	}
 	return o.SetSelection(m, index, int32(n.Caret), int32(n.Caret))
 }
-func (o atspiText) GetDefaultAttributes(m dbus.Message) (map[string]string, *dbus.Error) {
+func (o atspiText) GetDefaultAttributes(m *dbusMessage) (map[string]string, *dbusError) {
 	_, e := o.runes(m)
 	return map[string]string{}, e
 }
-func (o atspiText) GetDefaultAttributeSet(m dbus.Message) (map[string]string, *dbus.Error) {
+func (o atspiText) GetDefaultAttributeSet(m *dbusMessage) (map[string]string, *dbusError) {
 	return o.GetDefaultAttributes(m)
 }
-func (o atspiText) GetAttributes(m dbus.Message, offset int32) (map[string]string, int32, int32, *dbus.Error) {
+func (o atspiText) GetAttributes(m *dbusMessage, offset int32) (map[string]string, int32, int32, *dbusError) {
 	r, e := o.runes(m)
 	if e == nil && (offset < 0 || int(offset) > len(r)) {
 		e = atspiError("text offset out of bounds")
 	}
 	return map[string]string{}, 0, int32(len(r)), e
 }
-func (o atspiText) GetAttributeRun(m dbus.Message, offset int32, _ bool) (map[string]string, int32, int32, *dbus.Error) {
+func (o atspiText) GetAttributeRun(m *dbusMessage, offset int32, _ bool) (map[string]string, int32, int32, *dbusError) {
 	return o.GetAttributes(m, offset)
 }
-func (o atspiText) GetAttributeValue(m dbus.Message, offset int32, _ string) (string, *dbus.Error) {
+func (o atspiText) GetAttributeValue(m *dbusMessage, offset int32, _ string) (string, *dbusError) {
 	_, _, _, e := o.GetAttributes(m, offset)
 	return "", e
 }
 
 type atspiEditable struct{ a *atspiBridge }
 
-func (o atspiEditable) SetTextContents(m dbus.Message, text string) (bool, *dbus.Error) {
+func (o atspiEditable) SetTextContents(m *dbusMessage, text string) (bool, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return false, e
@@ -1061,30 +1119,39 @@ func (o atspiEditable) SetTextContents(m dbus.Message, text string) (bool, *dbus
 
 type atspiIntrospection struct{ a *atspiBridge }
 
-func (o atspiIntrospection) Introspect(m dbus.Message) (string, *dbus.Error) {
+func (o atspiIntrospection) Introspect(m *dbusMessage) (string, *dbusError) {
 	_, n, e := o.a.lookup(m)
 	if e != nil {
 		return "", e
 	}
-	node := &introspect.Node{Name: string(o.a.ref(n.ID).Path)}
+	var b strings.Builder
+	b.WriteString("<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\"\n \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n")
+	fmt.Fprintf(&b, "<node name=%q>\n", string(o.a.ref(n.ID).Path))
 	objects := o.a.objects()
-	for _, name := range append(atspiInterfaces(n), "org.freedesktop.DBus.Properties") {
-		iface := introspect.Interface{Name: name}
+	objects["org.freedesktop.DBus.Introspectable"] = o
+	for _, name := range append(atspiInterfaces(n), "org.freedesktop.DBus.Properties", "org.freedesktop.DBus.Introspectable") {
+		fmt.Fprintf(&b, "  <interface name=%q>\n", name)
 		if obj, ok := objects[name]; ok {
-			iface.Methods = introspect.Methods(obj)
+			dbusIntrospectMethods(&b, obj)
 		}
 		if values, err := (atspiProperties{o.a}).values(m, name); err == nil {
-			for key, value := range values {
+			keys := make([]string, 0, len(values))
+			for key := range values {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			for _, key := range keys {
 				access := "read"
 				if (name == atspiPrefix+"Application" && key == "Id") || (name == atspiPrefix+"Value" && key == "CurrentValue") {
 					access = "readwrite"
 				}
-				iface.Properties = append(iface.Properties, introspect.Property{Name: key, Type: value.Signature().String(), Access: access})
+				fmt.Fprintf(&b, "    <property name=%q type=%q access=%q/>\n", key, values[key].sig, access)
 			}
 		}
-		node.Interfaces = append(node.Interfaces, iface)
+		b.WriteString("  </interface>\n")
 	}
-	return introspect.NewIntrospectable(node).Introspect()
+	b.WriteString("</node>\n")
+	return b.String(), nil
 }
 
 func (w *xWindow) SetAccessibility(nodes []AccessNode) {
@@ -1107,7 +1174,7 @@ func (w *xWindow) SetAccessibility(nodes []AccessNode) {
 	if !w.originKnown {
 		w.updateAccessOrigin()
 	}
-	w.access.update(w.title, image.Rect(0, 0, w.width, w.height), w.accessOrigin, nodes)
+	w.access.set(w.title, image.Rect(0, 0, w.width, w.height), w.accessOrigin, nodes)
 }
 
 func (w *xWindow) updateAccessOrigin() {
@@ -1124,7 +1191,7 @@ func (w *xWindow) refreshAccessibility() {
 		return
 	}
 	w.updateAccessOrigin()
-	t := w.access.tree.Load()
+	t := w.access.current()
 	nodes := make([]AccessNode, 0, len(t.order)-2)
 	for _, id := range t.order[2:] {
 		n, _ := t.node(id)

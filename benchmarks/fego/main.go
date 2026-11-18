@@ -30,6 +30,13 @@ func cellValue(cell, frame int) float64 {
 	return float64((int64(cell)*7919+int64(frame)*31)%100000) / 100
 }
 
+// cellLabel formats like "%.2f" into a reused buffer, as the FLTK fixture uses
+// snprintf into a stack buffer before copy_label; only the label is allocated.
+func cellLabel(buf []byte, v float64) ([]byte, string) {
+	buf = strconv.AppendFloat(buf[:0], v, 'f', 2, 64)
+	return buf, string(buf)
+}
+
 func rowLabel(row int) string {
 	return fmt.Sprintf("Item %06d   Native UI row   %.2f", row, cellValue(row, 0))
 }
@@ -108,6 +115,17 @@ func (h *measuredHost) ScrollPixels(r image.Rectangle, delta image.Point) bool {
 	}).ScrollPixels(r, delta)
 }
 
+type regionHost interface {
+	RetainsPixels() bool
+	PresentRegion(*image.RGBA)
+}
+
+func (h *measuredHost) RetainsPixels() bool { return h.Host.(regionHost).RetainsPixels() }
+func (h *measuredHost) PresentRegion(img *image.RGBA) {
+	h.Host.(regionHost).PresentRegion(img)
+	h.presented = true
+}
+
 type measuredView struct {
 	fego.View
 	host *measuredHost
@@ -161,15 +179,19 @@ func scene(name string) (*ui.Element, func(int), int, int) {
 		return root, nil, 360, 260
 	case "grid":
 		cells := make([]*ui.Element, 600)
+		var buf []byte
+		var label string
 		for i := range cells {
 			v := cellValue(i, 0)
-			cells[i] = ui.Text(fmt.Sprintf("%.2f", v)).FontSize(11).TextColor(ui.RGB(16, 16, 16)).
+			buf, label = cellLabel(buf, v)
+			cells[i] = ui.Text(label).FontSize(11).TextColor(ui.RGB(16, 16, 16)).
 				Size(40, 20).Radius(0).Background(cellColor(v))
 		}
 		advance := func(frame int) {
 			for i, cell := range cells {
 				v := cellValue(i, frame)
-				cell.SetText(fmt.Sprintf("%.2f", v)).Background(cellColor(v))
+				buf, label = cellLabel(buf, v)
+				cell.SetText(label).Background(cellColor(v))
 			}
 		}
 		return ui.Grid(20, cells...).Gap(0).Fill(), advance, 800, 600

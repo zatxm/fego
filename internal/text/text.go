@@ -99,6 +99,8 @@ type System struct {
 	asciiGlyphs   [128]*glyph
 	glyphBytes    int
 	coverage      map[coverageKey]*source
+	asciiSources  [2][128]*source
+	kerns         [512]kernEntry
 	layouts       map[layoutKey]*layout
 	layoutBytes   int
 	numeric       layout
@@ -108,7 +110,11 @@ type System struct {
 	numericBold   bool
 	numericGlyphs [32]positioned
 	ink           color.RGBA
-	paint         image.Uniform
+	inkTerms      [4]uint32
+	blend         [256]glyphBlend
+	blendEpoch    uint32
+	sprites       map[spriteKey][]byte
+	spriteBytes   int
 }
 
 var bundled = sync.OnceValue(func() [2]*sfnt.Font {
@@ -132,14 +138,21 @@ func New() *System {
 		coverage: make(map[coverageKey]*source),
 		layouts:  make(map[layoutKey]*layout),
 	}
-	s.paint.C = &s.ink
-	for i := range 2 {
-		s.regular[i] = s.openCandidates(fontCandidates("latin", i == 1))
-		if s.regular[i] == nil {
-			s.regular[i] = &source{font: bundled()[i], name: "bundled Go"}
-		}
-	}
 	return s
+}
+
+// latin opens the system sans-serif font for a weight on first use; parsing
+// an unused weight would leave its tables and scratch buffers resident.
+func (s *System) latin(weight int) *source {
+	if src := s.regular[weight]; src != nil {
+		return src
+	}
+	src := s.openCandidates(fontCandidates("latin", weight == 1))
+	if src == nil {
+		src = &source{font: bundled()[weight], name: "bundled Go"}
+	}
+	s.regular[weight] = src
+	return src
 }
 
 // Close releases font files and cached data. Further Measure and Draw calls are no-ops.
@@ -155,10 +168,13 @@ func (s *System) Close() error {
 	s.sources = nil
 	s.faces = nil
 	s.glyphs = nil
+	s.sprites = nil
 	clear(s.asciiGlyphs[:])
 	s.asciiFace = faceKey{}
 	s.layouts = nil
 	s.coverage = nil
+	s.asciiSources = [2][128]*source{}
+	s.kerns = [512]kernEntry{}
 	s.regular, s.cjk = [2]*source{}, [2]*source{}
 	s.symbol = nil
 	s.buffer = sfnt.Buffer{}
@@ -214,7 +230,7 @@ func (s *System) Hit(text string, size float32, bold bool, x float32) int {
 				continue
 			}
 			if r == '\t' {
-				space := s.glyph(glyphKey{s.regular[weight], q, ' '}).advance
+				space := s.glyph(glyphKey{s.latin(weight), q, ' '}).advance
 				if step := int64(space) * 4; step > 0 {
 					position = (position/step + 1) * step
 				}
@@ -253,6 +269,13 @@ func (s *System) LineHeight(size float32, bold bool) float32 {
 // Draw draws a label with its line box's top-left at x,y. It never writes
 // outside clip or dst.Bounds. Glyph masks are cached independently of color.
 func (s *System) Draw(dst *image.RGBA, clip image.Rectangle, text string, x, y, size float32, ink color.RGBA, bold bool) {
+	s.DrawOn(dst, clip, text, x, y, size, ink, bold, image.Rectangle{}, color.RGBA{})
+}
+
+// DrawOn is Draw for text over solid: dst holds exactly the opaque color under
+// throughout that rectangle. Glyphs fully inside it, not overlapping earlier
+// glyphs of this text, are copied from blended sprites with identical pixels.
+func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y, size float32, ink color.RGBA, bold bool, solid image.Rectangle, under color.RGBA) {
 	q := fontSize(size)
 	clip = clip.Intersect(dst.Bounds())
 	if q == 0 || clip.Empty() || ink.A == 0 || !finite(x) || !finite(y) {
@@ -267,7 +290,9 @@ func (s *System) Draw(dst *image.RGBA, clip image.Rectangle, text string, x, y, 
 	if x+float32(l.maxX)/64 < float32(clip.Min.X)-size*2 || x+float32(l.minX)/64 > float32(clip.Max.X)+size*2 {
 		return
 	}
-	s.ink = ink
+	s.setInk(ink)
+	solid = solid.Intersect(clip)
+	var drawn image.Rectangle
 	for _, p := range l.glyphs {
 		gx := x + float32(p.x)/64
 		gy := y + float32(p.y)/64
@@ -286,9 +311,112 @@ func (s *System) Draw(dst *image.RGBA, clip image.Rectangle, text string, x, y, 
 		}
 		r := g.bounds.Add(image.Pt(int(math.Round(float64(gx))), int(math.Round(float64(gy)))))
 		visible := r.Intersect(clip)
-		if !visible.Empty() {
-			draw.DrawMask(dst, visible, &s.paint, image.Point{}, g.mask, visible.Min.Sub(r.Min), draw.Over)
+		if visible.Empty() {
+			continue
 		}
+		if r.In(solid) && !r.Overlaps(drawn) {
+			s.copySprite(dst, r, g, under)
+		} else {
+			s.drawGlyph(dst, visible, g.mask, visible.Min.Sub(r.Min))
+		}
+		drawn = drawn.Union(r)
+	}
+}
+
+// glyphBlend holds the terms of image/draw's glyph "over" blend that depend
+// only on the mask byte for the current ink. Entries are filled on first use
+// and invalidated by bumping blendEpoch, so changing ink costs nothing.
+type glyphBlend struct{ a, r, g, b, alpha, epoch uint32 }
+
+func (s *System) setInk(ink color.RGBA) {
+	if ink == s.ink && s.blendEpoch != 0 {
+		return
+	}
+	s.ink = ink
+	sr, sg, sb, sa := ink.RGBA()
+	s.inkTerms = [4]uint32{sr, sg, sb, sa}
+	if s.blendEpoch++; s.blendEpoch == 0 {
+		clear(s.blend[:])
+		s.blendEpoch = 1
+	}
+}
+
+func (s *System) fillBlend(t *glyphBlend, v uint8) {
+	const m = 1<<16 - 1
+	ma := uint32(v) * 0x101
+	sr, sg, sb, sa := s.inkTerms[0], s.inkTerms[1], s.inkTerms[2], s.inkTerms[3]
+	*t = glyphBlend{(m - sa*ma/m) * 0x101, sr * ma, sg * ma, sb * ma, sa * ma, s.blendEpoch}
+}
+
+// drawGlyph matches draw.DrawMask(dst, r, image.NewUniform(ink), mask, mp,
+// draw.Over) byte for byte. Full coverage with opaque ink reduces to the ink.
+func (s *System) drawGlyph(dst *image.RGBA, r image.Rectangle, mask *image.Alpha, mp image.Point) {
+	const m = 1<<16 - 1
+	opaque := s.ink.A == 255
+	solid := [4]byte{s.ink.R, s.ink.G, s.ink.B, s.ink.A}
+	w := r.Dx()
+	i0 := dst.PixOffset(r.Min.X, r.Min.Y)
+	mi0 := mask.PixOffset(mp.X, mp.Y)
+	for range r.Dy() {
+		row := dst.Pix[i0 : i0+4*w : i0+4*w]
+		coverage := mask.Pix[mi0 : mi0+w : mi0+w]
+		for x, v := range coverage {
+			if v == 0 {
+				continue
+			}
+			d := row[4*x : 4*x+4 : 4*x+4]
+			if v == 255 && opaque {
+				copy(d, solid[:])
+				continue
+			}
+			t := &s.blend[v]
+			if t.epoch != s.blendEpoch {
+				s.fillBlend(t, v)
+			}
+			d[0] = uint8((uint32(d[0])*t.a + t.r) / m >> 8)
+			d[1] = uint8((uint32(d[1])*t.a + t.g) / m >> 8)
+			d[2] = uint8((uint32(d[2])*t.a + t.b) / m >> 8)
+			d[3] = uint8((uint32(d[3])*t.a + t.alpha) / m >> 8)
+		}
+		i0 += dst.Stride
+		mi0 += mask.Stride
+	}
+}
+
+type spriteKey struct {
+	glyph      *glyph
+	ink, under color.RGBA
+}
+
+const maxSpriteBytes = 64 << 10
+
+// copySprite copies the glyph blended over under, blending it once per colors.
+func (s *System) copySprite(dst *image.RGBA, r image.Rectangle, g *glyph, under color.RGBA) {
+	key := spriteKey{g, s.ink, under}
+	w, h := r.Dx(), r.Dy()
+	pix := s.sprites[key]
+	if pix == nil {
+		pix = make([]byte, 4*w*h)
+		bg := [4]byte{under.R, under.G, under.B, under.A}
+		for i := 0; i < len(pix); i += 4 {
+			copy(pix[i:i+4], bg[:])
+		}
+		sprite := image.RGBA{Pix: pix, Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}
+		s.drawGlyph(&sprite, sprite.Rect, g.mask, image.Point{})
+		if s.spriteBytes+len(pix) > maxSpriteBytes {
+			clear(s.sprites)
+			s.spriteBytes = 0
+		}
+		if s.sprites == nil {
+			s.sprites = make(map[spriteKey][]byte)
+		}
+		s.sprites[key] = pix
+		s.spriteBytes += len(pix)
+	}
+	at := dst.PixOffset(r.Min.X, r.Min.Y)
+	for y := range h {
+		copy(dst.Pix[at:at+4*w], pix[4*w*y:4*w*(y+1)])
+		at += dst.Stride
 	}
 }
 
@@ -338,6 +466,8 @@ func (s *System) glyph(key glyphKey) *glyph {
 		clear(s.glyphs)
 		clear(s.asciiGlyphs[:])
 		s.glyphBytes = 0
+		clear(s.sprites)
+		s.spriteBytes = 0
 	}
 	index, _ := key.source.font.GlyphIndex(&s.buffer, key.r)
 	advance, _ := key.source.font.GlyphAdvance(&s.buffer, index, key.size, font.HintingFull)
@@ -360,6 +490,8 @@ func (s *System) rasterize(key glyphKey, g *glyph) {
 		clear(s.glyphs)
 		clear(s.asciiGlyphs[:])
 		s.glyphBytes = 0
+		clear(s.sprites)
+		s.spriteBytes = 0
 		s.glyphs[key] = g
 	}
 	g.mask = image.NewAlpha(image.Rect(0, 0, r.Dx(), r.Dy()))
@@ -373,12 +505,15 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 	if len(text) == s.numericLength && size == s.numericSize && bold == s.numericBold && text == string(s.numericKey[:s.numericLength]) {
 		return &s.numeric
 	}
-	if l := s.layouts[key]; l != nil {
-		return l
+	// Numeric labels are never cached; skip hashing them.
+	numeric := numericLabel(text)
+	if !numeric {
+		if l := s.layouts[key]; l != nil {
+			return l
+		}
 	}
 	// NFC makes decomposed Latin accents use the same glyph as precomposed text.
 	normal := text
-	numeric := numericLabel(text)
 	if !numeric && !norm.NFC.IsNormalString(normal) {
 		normal = norm.NFC.String(normal)
 	}
@@ -386,19 +521,23 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 	if bold {
 		weight = 1
 	}
-	base := s.face(faceKey{s.regular[weight], size}).Metrics()
+	base := s.face(faceKey{s.latin(weight), size}).Metrics()
 	var l *layout
 	if numeric {
 		s.numeric = layout{glyphs: s.numericGlyphs[:0]}
 		l = &s.numeric
 	} else {
-		l = &layout{}
+		// Size the cached glyph run once instead of leaving append growth garbage.
+		l = &layout{glyphs: make([]positioned, 0, utf8.RuneCountInString(normal))}
 	}
 	x, top := int64(0), int64(0)
 	ascent, descent := base.Ascent, base.Descent
 	lineStart := 0
 	var previous *source
 	var prevIndex sfnt.GlyphIndex
+	// Glyphs from one source share face metrics; look them up once per change.
+	var metricsSource *source
+	var metrics font.Metrics
 	finishLine := func() {
 		for i := lineStart; i < len(l.glyphs); i++ {
 			l.glyphs[i].y = top + int64(ascent)
@@ -417,7 +556,7 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 			finishLine()
 			continue
 		case '\t':
-			space := s.glyph(glyphKey{s.regular[weight], size, ' '}).advance
+			space := s.glyph(glyphKey{s.latin(weight), size, ' '}).advance
 			if step := int64(space) * 4; step > 0 {
 				x = (x/step + 1) * step
 			}
@@ -427,10 +566,11 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 		src := s.selectSource(r, bold)
 		g := s.glyph(glyphKey{src, size, r})
 		if previous == src {
-			kern, _ := src.font.Kern(&s.buffer, prevIndex, g.index, size, font.HintingFull)
-			x += int64(kern)
+			x += int64(s.kern(src, size, prevIndex, g.index))
 		}
-		metrics := s.face(faceKey{src, size}).Metrics()
+		if src != metricsSource {
+			metrics, metricsSource = s.face(faceKey{src, size}).Metrics(), src
+		}
 		ascent, descent = max(ascent, metrics.Ascent), max(descent, metrics.Descent)
 		l.glyphs = append(l.glyphs, positioned{source: src, r: r, x: x})
 		l.minX, l.maxX = min(l.minX, x), max(l.maxX, x)
@@ -478,7 +618,41 @@ func numericLabel(text string) bool {
 	return digit
 }
 
+// kernEntry memoizes one kerning pair in a small direct-mapped cache.
+type kernEntry struct {
+	source *source
+	size   fixed.Int26_6
+	a, b   sfnt.GlyphIndex
+	value  fixed.Int26_6
+}
+
+func (s *System) kern(src *source, size fixed.Int26_6, a, b sfnt.GlyphIndex) fixed.Int26_6 {
+	e := &s.kerns[(uint32(a)*2654435761^uint32(b)*40503^uint32(size))%uint32(len(s.kerns))]
+	if e.source == src && e.size == size && e.a == a && e.b == b {
+		return e.value
+	}
+	value, _ := src.font.Kern(&s.buffer, a, b, size, font.HintingFull)
+	*e = kernEntry{src, size, a, b, value}
+	return value
+}
+
 func (s *System) selectSource(r rune, bold bool) *source {
+	weight := 0
+	if bold {
+		weight = 1
+	}
+	if r >= 0 && r < 128 {
+		if src := s.asciiSources[weight][r]; src != nil {
+			return src
+		}
+		src := s.selectSourceSlow(r, bold)
+		s.asciiSources[weight][r] = src
+		return src
+	}
+	return s.selectSourceSlow(r, bold)
+}
+
+func (s *System) selectSourceSlow(r rune, bold bool) *source {
 	key := coverageKey{r, bold}
 	if src := s.coverage[key]; src != nil {
 		return src
@@ -487,7 +661,7 @@ func (s *System) selectSource(r rune, bold bool) *source {
 	if bold {
 		weight = 1
 	}
-	src := s.regular[weight]
+	src := s.latin(weight)
 	if !s.contains(src, r) {
 		if !s.cjkLoaded[weight] {
 			s.cjk[weight] = s.openCandidates(fontCandidates("cjk", bold))

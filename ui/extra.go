@@ -1,8 +1,8 @@
 package ui
 
 import (
+	"bytes"
 	"math"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -72,7 +72,7 @@ func (c *CalendarView) SetDate(date time.Time) *CalendarView {
 		for i, button := range c.days {
 			selected := !button.hidden && sameDate(c.date, c.dates[i])
 			if button.primary != selected {
-				button.primary = selected
+				button.own().primary = selected
 				button.touch(false)
 			}
 		}
@@ -97,7 +97,7 @@ func (c *CalendarView) showMonth(month time.Time) {
 		date := time.Date(month.Year(), month.Month(), day, 0, 0, 0, 0, month.Location())
 		c.dates[i] = date
 		button.Hidden(false).SetText(strconv.Itoa(day)).Label(date.Format("2006-01-02"))
-		button.primary = sameDate(c.date, date)
+		button.own().primary = sameDate(c.date, date)
 		button.touch(false)
 	}
 }
@@ -210,21 +210,69 @@ func finite(value float64) bool         { return !math.IsNaN(value) && !math.IsI
 func formatNumber(value float64) string { return strconv.FormatFloat(value, 'g', -1, 64) }
 func (n *NumberField) increment(direction int) {
 	// Add the displayed decimal values, rather than exposing binary float noise.
-	current, _ := new(big.Rat).SetString(formatNumber(n.value))
-	step, _ := new(big.Rat).SetString(formatNumber(n.step))
+	step := n.step
 	if direction < 0 {
-		current.Sub(current, step)
-	} else {
-		current.Add(current, step)
+		step = -step
 	}
-	value, _ := current.Float64()
-	value = max(n.minimum, min(n.maximum, value))
+	value := max(n.minimum, min(n.maximum, decimalSum(n.value, step)))
 	old := n.value
 	n.SetValue(value)
 	if n.value != old && n.onNumber != nil {
 		n.onNumber(n.value)
 	}
 }
+
+// decimalSum adds the shortest decimal forms of a and b exactly and rounds once.
+func decimalSum(a, b float64) float64 {
+	da, ea, na := decimalDigits(formatNumber(a))
+	db, eb, nb := decimalDigits(formatNumber(b))
+	e := min(ea, eb)
+	da = append(da, bytes.Repeat([]byte{'0'}, ea-e)...)
+	db = append(db, bytes.Repeat([]byte{'0'}, eb-e)...)
+	if pad := len(da) - len(db); pad > 0 {
+		db = append(bytes.Repeat([]byte{'0'}, pad), db...)
+	} else if pad < 0 {
+		da = append(bytes.Repeat([]byte{'0'}, -pad), da...)
+	}
+	sum := make([]byte, len(da)+1)
+	negative := na
+	if na == nb {
+		carry := byte(0)
+		for i := len(da) - 1; i >= 0; i-- {
+			d := da[i] - '0' + db[i] - '0' + carry
+			sum[i+1], carry = '0'+d%10, d/10
+		}
+		sum[0] = '0' + carry
+	} else {
+		if bytes.Compare(da, db) < 0 {
+			da, db, negative = db, da, nb
+		}
+		borrow := byte(0)
+		for i := len(da) - 1; i >= 0; i-- {
+			d := 10 + da[i] - db[i] - borrow
+			sum[i+1], borrow = '0'+d%10, 1-d/10
+		}
+		sum[0] = '0'
+	}
+	text := string(sum) + "e" + strconv.Itoa(e)
+	if negative && strings.Trim(text[:len(sum)], "0") != "" {
+		text = "-" + text
+	}
+	value, _ := strconv.ParseFloat(text, 64)
+	return value
+}
+
+// decimalDigits splits strconv's decimal or exponent form into digits×10^exp.
+func decimalDigits(s string) (digits []byte, exp int, negative bool) {
+	s, negative = strings.CutPrefix(s, "-")
+	mantissa, exponent, _ := strings.Cut(s, "e")
+	if exponent != "" {
+		exp, _ = strconv.Atoi(exponent)
+	}
+	whole, fraction, _ := strings.Cut(mantissa, ".")
+	return []byte(whole + fraction), exp - len(fraction), negative
+}
+
 func (n *NumberField) updateButtons() {
 	n.minus.Disabled(n.value <= n.minimum)
 	n.plus.Disabled(n.value >= n.maximum)

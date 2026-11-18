@@ -2,9 +2,15 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"math"
+	"math/rand/v2"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/zatxm/fego"
 )
 
 func TestTabsSegmentsAndAccordion(t *testing.T) {
@@ -99,6 +105,39 @@ func TestMenuBreadcrumbsAndDialog(t *testing.T) {
 	clickElement(view, close)
 	if view.Document.live.dialog != nil {
 		t.Fatal("dialog action did not close modal")
+	}
+}
+
+func TestMarkdownSpansMatchInlineExpression(t *testing.T) {
+	inline := regexp.MustCompile("\\*\\*([^*\n]+)\\*\\*|`([^`\n]+)`|\\[([^\\]\n]+)\\]\\(([^)\n]*)\\)")
+	pieces := []string{"*", "**", "`", "[", "]", "(", ")", "](", "\n", "a", "中", "x y", "https://e.com", "\xff"}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 50000 {
+		var b strings.Builder
+		for range rng.IntN(16) {
+			b.WriteString(pieces[rng.IntN(len(pieces))])
+		}
+		text := b.String()
+		var want, got []string
+		for _, m := range inline.FindAllStringSubmatchIndex(text, -1) {
+			body := m[2:4]
+			if m[4] >= 0 {
+				body = m[4:6]
+			} else if m[6] >= 0 {
+				body = m[6:8]
+			}
+			want = append(want, fmt.Sprint(m[0], m[1], text[body[0]:body[1]]))
+		}
+		var scan markdownScanner
+		for i := 0; i < len(text); i++ {
+			if end, span, ok := scan.match(text, i); ok {
+				got = append(got, fmt.Sprint(i, end, span.Text))
+				i = end - 1
+			}
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("%q: got %q want %q", text, got, want)
+		}
 	}
 }
 
@@ -199,5 +238,40 @@ func TestDenseChartKeepsNarrowSpikes(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("dense-line reduction discarded spike")
+	}
+}
+
+func TestChartShapeCacheFollowsDataAndPlot(t *testing.T) {
+	wave := func(phase float64) []float64 {
+		values := make([]float64, 600)
+		for i := range values {
+			values[i] = math.Sin(float64(i)/17+phase) * 50
+		}
+		values[300] = math.NaN()
+		return values
+	}
+	render := func(chart *Chart, width, height int) []byte {
+		view := NewTester(chart.Element.Fill(), width, height)
+		defer view.Close()
+		return view.Snapshot().Pix
+	}
+	for _, newChart := range []func(...Series) *Chart{LineChart, BarChart} {
+		checkChartCache(t, newChart, wave, render)
+	}
+}
+
+func checkChartCache(t *testing.T, newChart func(...Series) *Chart, wave func(float64) []float64, render func(*Chart, int, int) []byte) {
+	cached := newChart(Series{Values: wave(0)})
+	view := NewTester(cached.Element.Fill(), 420, 260)
+	defer view.Close()
+	view.Snapshot()
+	cached.SetSeries(Series{Values: wave(1)}, Series{Values: wave(2)})
+	if !bytes.Equal(view.Snapshot().Pix, render(newChart(Series{Values: wave(1)}, Series{Values: wave(2)}), 420, 260)) {
+		t.Fatal("chart reused shapes after its data changed")
+	}
+	view.Width, view.Height = 300, 200
+	view.Send(fego.Event{Kind: fego.Resize})
+	if !bytes.Equal(view.Snapshot().Pix, render(newChart(Series{Values: wave(1)}, Series{Values: wave(2)}), 300, 200)) {
+		t.Fatal("chart reused shapes after its plot changed")
 	}
 }

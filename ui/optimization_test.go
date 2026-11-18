@@ -2,9 +2,12 @@ package ui
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 	"image/color"
 	"math"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -558,4 +561,15 @@ func TestRichTextRetainsAccessibleText(t *testing.T) {
 	if h.nodes[0].Label != "Custom label" {
 		t.Fatal("explicit rich text label was lost", h.nodes)
 	}
+}
+
+// Layout-only elements share noWidget; any write through them would leak into
+// every Box and Text, so the whole package run must leave it untouched.
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if !reflect.DeepEqual(noWidget, widget{selected: -1}) {
+		fmt.Fprintf(os.Stderr, "shared widget state was modified: %+v\n", noWidget)
+		code = 1
+	}
+	os.Exit(code)
 }

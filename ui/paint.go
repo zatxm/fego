@@ -21,6 +21,10 @@ type Painter struct {
 	originX, originY float32
 	bounds           Rect
 	canvas           *Painter
+	// solid is the latest opaque fill with nothing drawn over it since, so text
+	// on it can copy pre-blended glyphs.
+	solid      image.Rectangle
+	solidColor Color
 }
 
 // Bounds is the canvas's local logical rectangle; Theme is its current palette.
@@ -33,6 +37,7 @@ func (p *Painter) fillPixels(r image.Rectangle, c Color) {
 		return
 	}
 	if c.A == 255 {
+		p.solid, p.solidColor = r, c
 		row := p.dst.Pix[p.dst.PixOffset(r.Min.X, r.Min.Y):p.dst.PixOffset(r.Max.X, r.Min.Y)]
 		row[0], row[1], row[2], row[3] = c.R, c.G, c.B, 255
 		for n := 4; n < len(row); n *= 2 {
@@ -43,16 +48,51 @@ func (p *Painter) fillPixels(r image.Rectangle, c Color) {
 		}
 		return
 	}
+	p.solid = image.Rectangle{}
+	// Same per-pixel blend as pixel. A fixed color makes each channel a function
+	// of its destination byte, so larger fills look results up instead.
+	a := uint32(c.A)
+	inv := 255 - a
+	cr, cg, cb := uint32(c.R)*a+127, uint32(c.G)*a+127, uint32(c.B)*a+127
+	if r.Dx()*r.Dy() >= 512 {
+		var lut [4][256]uint8
+		for v := range uint32(256) {
+			lut[0][v] = uint8((cr + v*inv) / 255)
+			lut[1][v] = uint8((cg + v*inv) / 255)
+			lut[2][v] = uint8((cb + v*inv) / 255)
+			lut[3][v] = uint8(a + (v*inv+127)/255)
+		}
+		for y := r.Min.Y; y < r.Max.Y; y++ {
+			row := p.dst.Pix[p.dst.PixOffset(r.Min.X, y):p.dst.PixOffset(r.Max.X, y)]
+			for i := 0; i+3 < len(row); i += 4 {
+				d := row[i : i+4 : i+4]
+				d[0], d[1], d[2], d[3] = lut[0][d[0]], lut[1][d[1]], lut[2][d[2]], lut[3][d[3]]
+			}
+		}
+		return
+	}
 	for y := r.Min.Y; y < r.Max.Y; y++ {
-		for x := r.Min.X; x < r.Max.X; x++ {
-			p.pixel(x, y, c)
+		row := p.dst.Pix[p.dst.PixOffset(r.Min.X, y):p.dst.PixOffset(r.Max.X, y)]
+		for i := 0; i+3 < len(row); i += 4 {
+			d := row[i : i+4 : i+4]
+			d[0] = uint8((cr + uint32(d[0])*inv) / 255)
+			d[1] = uint8((cg + uint32(d[1])*inv) / 255)
+			d[2] = uint8((cb + uint32(d[2])*inv) / 255)
+			d[3] = uint8(a + (uint32(d[3])*inv+127)/255)
 		}
 	}
 }
 
+// outsideRows conservatively rejects device rows [lo, hi] before rounding;
+// paint bands repeat every primitive of a full-width canvas.
+func (p *Painter) outsideRows(lo, hi float32) bool {
+	return hi < float32(p.clip.Min.Y)-1 || lo > float32(p.clip.Max.Y)+1
+}
+
 func (p *Painter) pixel(x, y int, c Color) {
+	p.solid = image.Rectangle{}
 	i := p.dst.PixOffset(x, y)
-	d := p.dst.Pix[i : i+4]
+	d := p.dst.Pix[i : i+4 : i+4]
 	a := uint32(c.A)
 	inv := 255 - a
 	d[0] = uint8((uint32(c.R)*a + uint32(d[0])*inv + 127) / 255)
@@ -69,6 +109,9 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 	r.X += p.originX
 	r.Y += p.originY
 	x0, y0, x1, y1 := r.X*p.scale, r.Y*p.scale, (r.X+r.W)*p.scale, (r.Y+r.H)*p.scale
+	if p.outsideRows(min(y0, y1), max(y0, y1)) {
+		return
+	}
 	rad := min(radius*p.scale, (x1-x0)/2, (y1-y0)/2)
 	b := r.pixels(p.scale).Intersect(p.clip).Intersect(p.dst.Rect)
 	if b.Empty() || c.A == 0 {
@@ -79,6 +122,9 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 		return
 	}
 	aligned := x0 == float32(math.Trunc(float64(x0))) && x1 == float32(math.Trunc(float64(x1))) && y0 == float32(math.Trunc(float64(y0))) && y1 == float32(math.Trunc(float64(y1)))
+	// Straight-side rows (dy == 0) have identical edge coverage; reuse it.
+	var edge [64]int16
+	edgeReady := false
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		py := float32(y) + .5
 		dy := max(rad-(py-y0), rad-(y1-py), 0)
@@ -100,18 +146,42 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 			rowColor.A = uint8(float32(c.A) * min(float32(1), max(float32(0), min(py-y0+.5, y1-py+.5))))
 			p.fillPixels(image.Rect(lo, y, hi, y+1), rowColor)
 		}
-		for _, span := range [][2]int{{b.Min.X, min(lo, b.Max.X)}, {max(hi, b.Min.X), b.Max.X}} {
+		spans := [2][2]int{{b.Min.X, min(lo, b.Max.X)}, {max(hi, b.Min.X), b.Max.X}}
+		if dy == 0 && edgeReady {
+			i := 0
+			for _, span := range spans {
+				for x := span[0]; x < span[1]; x++ {
+					if a := edge[i]; a >= 0 {
+						cc := c
+						cc.A = uint8(a)
+						p.pixel(x, y, cc)
+					}
+					i++
+				}
+			}
+			continue
+		}
+		cache := dy == 0 && max(0, spans[0][1]-spans[0][0])+max(0, spans[1][1]-spans[1][0]) <= len(edge)
+		i := 0
+		for _, span := range spans {
 			for x := span[0]; x < span[1]; x++ {
 				px := float32(x) + .5
 				dx := max(x0+rad-px, px-(x1-rad), 0)
 				cov := min(float32(1), max(float32(0), rad+.5-float32(math.Sqrt(float64(dx*dx+dy*dy)))))
+				a := int16(-1)
 				if cov > 0 {
 					cc := c
 					cc.A = uint8(float32(c.A) * cov)
 					p.pixel(x, y, cc)
+					a = int16(cc.A)
+				}
+				if cache {
+					edge[i] = a
+					i++
 				}
 			}
 		}
+		edgeReady = cache
 	}
 }
 func (p *Painter) Circle(x, y, r float32, c Color) {
@@ -123,6 +193,9 @@ func (p *Painter) Line(x1, y1, x2, y2, width float32, c Color) {
 	x2 = (x2 + p.originX) * p.scale
 	y2 = (y2 + p.originY) * p.scale
 	width *= p.scale
+	if p.outsideRows(min(y1, y2)-width, max(y1, y2)+width) {
+		return
+	}
 	r := image.Rect(int(math.Floor(float64(min(x1, x2)-width))), int(math.Floor(float64(min(y1, y2)-width))), int(math.Ceil(float64(max(x1, x2)+width))), int(math.Ceil(float64(max(y1, y2)+width)))).Intersect(p.clip).Intersect(p.dst.Rect)
 	dx, dy := x2-x1, y2-y1
 	if math.Abs(float64(dx)) <= 8 || math.Abs(float64(dy)) <= 8 {
@@ -166,7 +239,9 @@ func (p *Painter) Label(s string, x, y, size float32, c Color, bold bool) {
 	// Widget colors are straight alpha; image/draw text expects premultiplied ink.
 	a := uint32(c.A)
 	ink := color.RGBA{uint8(uint32(c.R) * a / 255), uint8(uint32(c.G) * a / 255), uint8(uint32(c.B) * a / 255), c.A}
-	p.text.Draw(p.dst, p.clip, s, (x+p.originX)*p.scale, (y+p.originY)*p.scale, size*p.scale, ink, bold)
+	under := color.RGBA{p.solidColor.R, p.solidColor.G, p.solidColor.B, 255}
+	p.text.DrawOn(p.dst, p.clip, s, (x+p.originX)*p.scale, (y+p.originY)*p.scale, size*p.scale, ink, bold, p.solid, under)
+	p.solid = image.Rectangle{}
 }
 
 func (p *Painter) Measure(s string, size float32, bold bool) (float32, float32) {
@@ -176,6 +251,7 @@ func (p *Painter) Image(img image.Image, r Rect) {
 	if img == nil {
 		return
 	}
+	p.solid = image.Rectangle{}
 	r.X += p.originX
 	r.Y += p.originY
 	dst := r.pixels(p.scale)
@@ -184,8 +260,9 @@ func (p *Painter) Image(img image.Image, r Rect) {
 		return
 	}
 	src := img.Bounds()
-	if rgba, ok := img.(*image.RGBA); ok && !src.Empty() && clip.Dx() >= src.Dx() && clip.Dy() >= src.Dy() && rgba.Opaque() {
+	if rgba, ok := img.(*image.RGBA); ok && !src.Empty() && dst.Dx() >= src.Dx() && dst.Dy() >= src.Dy() && rgba.Opaque() {
 		// Opaque upscaling can reuse painted rows without blending another background.
+		// Sampling depends on dst only, so any clip, including a paint band, matches.
 		previousY := src.Min.Y - 1
 		var previous []byte
 		for y := clip.Min.Y; y < clip.Max.Y; y++ {
@@ -521,6 +598,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			canvas.originX, canvas.originY = r.X, r.Y
 			canvas.bounds = Rect{W: r.W, H: r.H}
 			e.draw(canvas)
+			p.solid = image.Rectangle{}
 		}
 	}
 }

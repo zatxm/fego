@@ -20,6 +20,8 @@ const (
 	AccessAction
 )
 
+// A Paint event may carry the lost area in X, Y, Width and Height (device
+// pixels); a zero size means the whole window.
 type Event struct {
 	Kind                       EventKind
 	X, Y, DX, DY               float32
@@ -82,4 +84,12 @@ type Accessible interface {
 // Returning false leaves the window untouched and requests normal presentation.
 type PixelScroller interface {
 	ScrollPixels(image.Rectangle, image.Point) bool
+}
+
+// RegionPresenter windows retain presented pixels and emit Paint after losing
+// any of them. PresentRegion uploads img at its bounds, in window device pixels,
+// so callers can paint damaged regions without a full-window client surface.
+// img is borrowed for the call and must not be retained.
+type RegionPresenter interface {
+	PresentRegion(*image.RGBA)
 }

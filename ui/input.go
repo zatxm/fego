@@ -128,7 +128,7 @@ func (v *view) input(ev fego.Event) {
 			if e.kind == kSlider {
 				v.slide(e, x)
 			} else if e.kind == kInput || e.kind == kEditor {
-				e.cursor = v.textPosition(e, x, y)
+				e.own().cursor = v.textPosition(e, x, y)
 				v.invalidate(e, false)
 			}
 		}
@@ -153,9 +153,9 @@ func (v *view) input(ev fego.Event) {
 		v.focus(e)
 		if e != nil {
 			if e.kind == kInput || e.kind == kEditor {
-				e.cursor = v.textPosition(e, x, y)
+				e.own().cursor = v.textPosition(e, x, y)
 				if !ev.Shift {
-					e.anchor = e.cursor
+					e.own().anchor = e.cursor
 				}
 			}
 			if e.kind == kSlider {
@@ -373,7 +373,7 @@ func (v *view) activate(e *Element, x, y float32) {
 		if e.kind == kTree {
 			n := e.visibleTree[i].node
 			if len(n.Children) > 0 {
-				e.expanded[n] = !e.expanded[n]
+				e.own().expanded[n] = !e.expanded[n]
 				e.rebuildTree()
 				e.scroll = min(e.scroll, e.maxScroll())
 			}
@@ -452,7 +452,7 @@ func (v *view) navigate(e *Element, key string) {
 			i = n - 1
 		case "ArrowRight", "ArrowLeft":
 			if e.kind == kTree && i >= 0 && i < n {
-				e.expanded[e.visibleTree[i].node] = key == "ArrowRight"
+				e.own().expanded[e.visibleTree[i].node] = key == "ArrowRight"
 				e.rebuildTree()
 				e.touch(false)
 			}
@@ -497,9 +497,9 @@ func (v *view) sortTable(e *Element, x float32) {
 		left += v.columnWidth(e, i)
 	}
 	if len(e.order) != len(e.rows) {
-		e.order = make([]int, len(e.rows))
+		e.own().order = make([]int, len(e.rows))
 		for i := range e.order {
-			e.order[i] = i
+			e.own().order[i] = i
 		}
 	}
 	value := func(i int) string {
@@ -519,7 +519,7 @@ func (v *view) sortTable(e *Element, x float32) {
 		}
 		return a > b
 	})
-	e.selected = -1
+	e.own().selected = -1
 	e.touch(false)
 }
 func (v *view) inputInner(e *Element) Rect {
@@ -586,9 +586,9 @@ func (v *view) updateCaret() {
 	x, y := v.caretPosition(e, v.inputInner(e))
 	inner := v.inputInner(e)
 	if x > inner.X+inner.W-2 {
-		e.scrollX += x - (inner.X + inner.W - 2)
+		e.own().scrollX += x - (inner.X + inner.W - 2)
 	} else if x < inner.X {
-		e.scrollX = max(0, e.scrollX-(inner.X-x))
+		e.own().scrollX = max(0, e.scrollX-(inner.X-x))
 	}
 	x, y = v.caretPosition(e, inner)
 	r := Rect{x, y, 2, v.text.LineHeight(v.font(e), false)}
@@ -608,20 +608,20 @@ func (v *view) replaceSelection(e *Element, text string) {
 	}
 	rs := []rune(e.text)
 	insert := []rune(text)
-	e.undo = append(e.undo, e.text)
-	e.undoBytes += len(e.text)
+	e.own().undo = append(e.undo, e.text)
+	e.own().undoBytes += len(e.text)
 	for len(e.undo) > 64 || e.undoBytes > 4<<20 {
-		e.undoBytes -= len(e.undo[0])
-		e.undo[0] = ""
-		e.undo = e.undo[1:]
+		e.own().undoBytes -= len(e.undo[0])
+		e.own().undo[0] = ""
+		e.own().undo = e.undo[1:]
 	}
 	next := make([]rune, 0, len(rs)-(b-a)+len(insert))
 	next = append(next, rs[:a]...)
 	next = append(next, insert...)
 	next = append(next, rs[b:]...)
 	e.text = string(next)
-	e.cursor = a + len(insert)
-	e.anchor = e.cursor
+	e.own().cursor = a + len(insert)
+	e.own().anchor = e.cursor
 	v.edited(e)
 }
 func (v *view) edited(e *Element) {
@@ -647,8 +647,8 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 	if command {
 		switch strings.ToLower(ev.Key) {
 		case "a":
-			e.anchor = 0
-			e.cursor = len(rs)
+			e.own().anchor = 0
+			e.own().cursor = len(rs)
 			e.touch(false)
 			return
 		case "c", "x":
@@ -674,11 +674,11 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		case "z":
 			if len(e.undo) > 0 {
 				e.text = e.undo[len(e.undo)-1]
-				e.undoBytes -= len(e.text)
-				e.undo[len(e.undo)-1] = ""
-				e.undo = e.undo[:len(e.undo)-1]
-				e.cursor = len([]rune(e.text))
-				e.anchor = e.cursor
+				e.own().undoBytes -= len(e.text)
+				e.own().undo[len(e.undo)-1] = ""
+				e.own().undo = e.undo[:len(e.undo)-1]
+				e.own().cursor = len([]rune(e.text))
+				e.own().anchor = e.cursor
 				v.edited(e)
 			}
 			return
@@ -688,13 +688,13 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 	switch ev.Key {
 	case "Backspace":
 		if e.cursor == e.anchor && e.cursor > 0 {
-			e.anchor = e.cursor - 1
+			e.own().anchor = e.cursor - 1
 		}
 		v.replaceSelection(e, "")
 		return
 	case "Delete":
 		if e.cursor == e.anchor && e.cursor < len(rs) {
-			e.anchor = e.cursor + 1
+			e.own().anchor = e.cursor + 1
 		}
 		v.replaceSelection(e, "")
 		return
@@ -706,36 +706,36 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		}
 		return
 	case "ArrowLeft":
-		e.cursor = max(0, e.cursor-1)
+		e.own().cursor = max(0, e.cursor-1)
 		if command {
 			for e.cursor > 0 && e.cursor < len(rs) && unicode.IsSpace(rs[e.cursor]) {
-				e.cursor--
+				e.own().cursor--
 			}
 			for e.cursor > 0 && !unicode.IsSpace(rs[e.cursor-1]) {
-				e.cursor--
+				e.own().cursor--
 			}
 		}
 	case "ArrowRight":
-		e.cursor = min(len(rs), e.cursor+1)
+		e.own().cursor = min(len(rs), e.cursor+1)
 		if command {
 			for e.cursor < len(rs) && !unicode.IsSpace(rs[e.cursor]) {
-				e.cursor++
+				e.own().cursor++
 			}
 		}
 	case "Home":
 		if command {
-			e.cursor = 0
+			e.own().cursor = 0
 		} else {
 			for e.cursor > 0 && rs[e.cursor-1] != '\n' {
-				e.cursor--
+				e.own().cursor--
 			}
 		}
 	case "End":
 		if command {
-			e.cursor = len(rs)
+			e.own().cursor = len(rs)
 		} else {
 			for e.cursor < len(rs) && rs[e.cursor] != '\n' {
-				e.cursor++
+				e.own().cursor++
 			}
 		}
 	case "ArrowUp", "ArrowDown":
@@ -744,12 +744,12 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		if ev.Key == "ArrowUp" {
 			dy = -dy
 		}
-		e.cursor = v.textPosition(e, x, y+dy+v.font(e)*.3)
+		e.own().cursor = v.textPosition(e, x, y+dy+v.font(e)*.3)
 	default:
 		return
 	}
 	if !ev.Shift {
-		e.anchor = e.cursor
+		e.own().anchor = e.cursor
 	}
 	if old != e.cursor {
 		e.touch(false)

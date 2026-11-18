@@ -113,10 +113,22 @@ func TestX11ScaleAndKeys(t *testing.T) {
 }
 
 // FEGO_X11_TEST=1 DISPLAY=:... go test ./internal/platform -run TestX11Native -v
+var raceEnabled bool
+
 func TestX11Native(t *testing.T) {
 	if os.Getenv("FEGO_X11_TEST") != "1" {
 		t.Skip("set FEGO_X11_TEST=1 on a dedicated X display")
 	}
+	for _, shm := range []bool{true, false} {
+		t.Run(map[bool]string{true: "shm", false: "socket"}[shm], func(t *testing.T) {
+			xShmDisabled = !shm
+			defer func() { xShmDisabled = false }()
+			testX11Native(t, shm)
+		})
+	}
+}
+
+func testX11Native(t *testing.T, shm bool) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 	var b *xBackend
@@ -139,8 +151,12 @@ func TestX11Native(t *testing.T) {
 	b = native.(*xBackend)
 	defer b.release()
 	events := map[EventKind]int{}
+	var lastPaint Event
 	window, err := b.Open(Options{Title: "Fego native test", Width: 160, Height: 100}, func(e Event) {
 		events[e.Kind]++
+		if e.Kind == Paint {
+			lastPaint = e
+		}
 		if e.Kind == Paint {
 			select {
 			case ready <- struct{}{}:
@@ -176,11 +192,20 @@ func TestX11Native(t *testing.T) {
 				}
 			}
 			w.Present(img, []image.Rectangle{img.Bounds()})
-			if n := testing.AllocsPerRun(25, func() { w.putImage(0, 0, 1, 1) }); n != 0 {
+			if shm != (w.shm != nil) && (!shm || b.shmAvailable()) {
+				t.Errorf("shared-memory upload active=%v, requested %v", w.shm != nil, shm)
+			}
+			if w.shm != nil {
+				if n := testing.AllocsPerRun(25, func() { w.shmPut(w.shm, 0, 0, 1, 1) }); n != 0 {
+					t.Errorf("XShmPutImage argument conversion allocated %v times", n)
+				}
+			} else if n := testing.AllocsPerRun(25, func() { w.putImage(0, 0, 1, 1) }); n != 0 {
 				t.Errorf("XPutImage argument conversion allocated %v times", n)
 			}
 			damage := []image.Rectangle{img.Bounds()}
-			if n := testing.AllocsPerRun(25, func() { w.Present(img, damage) }); n != 0 {
+			// Shared-memory waits make several pooled purego calls per present.
+			pooled := raceEnabled && w.shm != nil
+			if n := testing.AllocsPerRun(25, func() { w.Present(img, damage) }); n != 0 && !pooled {
 				t.Errorf("steady native Present allocated %v times", n)
 			}
 			fullCapacity := w.imageBytes
@@ -236,6 +261,18 @@ func TestX11Native(t *testing.T) {
 			if events[Paint] != before+1 {
 				t.Error("lost scroll source did not request repaint")
 			}
+			// An Expose series becomes one Paint carrying the union of lost areas.
+			for i, r := range []image.Rectangle{image.Rect(5, 6, 15, 26), image.Rect(40, 2, 44, 9)} {
+				expose = xEvent{}
+				*(*xAny)(unsafe.Pointer(&expose)) = xAny{Kind: xExpose, Display: b.display, Window: w.id}
+				expose[5] = uint64(uint32(r.Min.X)) | uint64(uint32(r.Min.Y))<<32
+				expose[6] = uint64(uint32(r.Dx())) | uint64(uint32(r.Dy()))<<32
+				expose[7] = uint64(1 - i)
+				b.event(&expose)
+			}
+			if events[Paint] != before+2 || lastPaint.X != 5 || lastPaint.Y != 2 || lastPaint.Width != 39 || lastPaint.Height != 24 {
+				t.Errorf("expose series paint=%+v", lastPaint)
+			}
 			// A cropped image with a nonzero origin still targets client coordinates.
 			parent := image.NewRGBA(image.Rect(10, 20, 174, 124))
 			cropped := parent.SubImage(image.Rect(12, 22, 172, 122)).(*image.RGBA)
@@ -250,6 +287,26 @@ func TestX11Native(t *testing.T) {
 					t.Errorf("cropped pixel=%#x", got)
 				}
 				xl.destroyImage(actual)
+			}
+			// Region bounds are window coordinates, unlike a full surface's origin.
+			region := image.NewRGBA(image.Rect(50, 60, 53, 62))
+			region.SetRGBA(51, 61, color.RGBA{R: 98, G: 76, B: 54, A: 255})
+			w.PresentRegion(region)
+			if n := testing.AllocsPerRun(25, func() { w.PresentRegion(region) }); n != 0 && !pooled {
+				t.Errorf("PresentRegion allocated %v times", n)
+			}
+			syncX(b.display, 0)
+			actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+			if actual == nil {
+				t.Error("region readback failed")
+			} else {
+				if got := getPixel(actual, 51, 61) & 0xffffff; got != 0x624c36 {
+					t.Errorf("region pixel=%#x", got)
+				}
+				xl.destroyImage(actual)
+			}
+			if w.surfaceSize != (image.Point{}) {
+				t.Error("region upload left a full-surface size for partial presents")
 			}
 			w.Present(img, []image.Rectangle{img.Rect})
 			if w.imageBytes < 160*100*4 {
@@ -347,6 +404,18 @@ func TestX11Native(t *testing.T) {
 			if w.width != 180 || w.height != 120 {
 				t.Errorf("native resize=%dx%d", w.width, w.height)
 			}
+			if w.shm != nil && w.shm.pending != [2]int{} {
+				t.Errorf("shared-memory completions not consumed: %v", w.shm.pending)
+			}
+			if shm && b.shmAvailable() {
+				// A server that cannot attach (remote, other IPC namespace) must not stop the app.
+				info := (*xShmInfo)(unsafe.Pointer(xl.calloc(unsafe.Sizeof(xShmInfo{}), 1)))
+				info.ID = -1
+				if b.shmAttach(info) || b.err != nil {
+					t.Errorf("failed attach accepted or fatal: %v", b.err)
+				}
+				xl.free(unsafe.Pointer(info))
+			}
 			w.Close()
 			w.Close()
 			b.Quit()
@@ -364,7 +433,7 @@ func TestX11Native(t *testing.T) {
 			t.Errorf("native event %d not delivered: %v", kind, events)
 		}
 	}
-	if len(b.windows) != 0 || w.img != nil || w.imageBytes != 0 || w.gc != 0 || w.ic != 0 || w.access != nil {
+	if len(b.windows) != 0 || w.img != nil || w.shm != nil || w.imageBytes != 0 || w.gc != 0 || w.ic != 0 || w.access != nil {
 		t.Fatal("native resources retained after close")
 	}
 	b.Wake()

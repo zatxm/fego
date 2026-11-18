@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -22,6 +23,19 @@ func TestSceneFixturesAndUpdates(t *testing.T) {
 	}
 	if root.Bounds().W != 800 || root.Bounds().H != 600 {
 		t.Fatal("scene dimensions changed")
+	}
+}
+
+func TestCellLabelMatchesPrintf(t *testing.T) {
+	var buf []byte
+	var got string
+	for cell := range 600 {
+		for _, frame := range []int{0, 1, 321, 99999} {
+			v := cellValue(cell, frame)
+			if buf, got = cellLabel(buf, v); got != fmt.Sprintf("%.2f", v) {
+				t.Fatalf("cell %d frame %d: %q", cell, frame, got)
+			}
+		}
 	}
 }
 

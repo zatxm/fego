@@ -402,3 +402,141 @@ func TestCleanScrollViewReusesFrameStorage(t *testing.T) {
 		t.Fatal("allocation check did not exercise repeated frames")
 	}
 }
+
+type regionScreen struct {
+	*scrollScreen
+	regions int
+}
+
+func (h *regionScreen) RetainsPixels() bool { return true }
+func (h *regionScreen) PresentRegion(img *image.RGBA) {
+	if h.screen == nil || h.screen.Rect != image.Rect(0, 0, h.Width, h.Height) {
+		h.screen = image.NewRGBA(image.Rect(0, 0, h.Width, h.Height))
+	}
+	if !img.Rect.In(h.screen.Rect) || len(img.Pix) > regionBandBytes {
+		panic(fmt.Sprint("region outside window or band too large: ", img.Rect))
+	}
+	draw.Draw(h.screen, img.Rect, img, img.Rect.Min, draw.Src)
+	h.regions++
+	h.uploaded += img.Rect.Dx() * img.Rect.Dy()
+}
+func (h *regionScreen) Present(*image.RGBA, []image.Rectangle) {
+	panic("retained window received a full-surface present")
+}
+
+func checkRegionPixels(t *testing.T, h *regionScreen) {
+	t.Helper()
+	v := h.Document.live
+	if v.img != nil {
+		t.Fatal("retained window kept a full-window surface")
+	}
+	want := image.NewRGBA(v.size)
+	v.paintRegion(want, v.size)
+	if !bytes.Equal(h.screen.Pix, want.Pix) {
+		for i := 0; i < len(want.Pix); i += 4 {
+			if !bytes.Equal(h.screen.Pix[i:i+4], want.Pix[i:i+4]) {
+				t.Fatalf("region screen differs at %d,%d", i/4%v.size.Dx(), i/4/v.size.Dx())
+			}
+		}
+	}
+}
+
+func TestRegionPresentMatchesFullRepaint(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 2} {
+		for _, native := range []bool{false, true} {
+			t.Run(fmt.Sprint(scale, native), func(t *testing.T) {
+				rows := List(1000, func(i int) string { return fmt.Sprintf("Row %d 中文", i) }).Height(220).SetSelected(2)
+				content := Column().Gap(3)
+				for i := range 40 {
+					content.Append(Text(fmt.Sprintf("Item %d", i)).Height(28).Background(RGB(230, uint8(i*5), 200)))
+				}
+				input := TextInput("edit me")
+				doc := View(Column(Row(input, Button("Go", nil)), rows, ScrollView(content).Height(160).Background(RGB(250, 250, 250))).Padding(7))
+				h := &regionScreen{scrollScreen: &scrollScreen{Tester: &Tester{Document: doc, Width: 640, Height: 700, Scale: scale}, supported: native}}
+				doc.Mount(h)
+				h.Step()
+				h.Document.live.frame(false)
+				checkRegionPixels(t, h)
+				for _, dy := range []float32{8, 8, 48, -16, 1, -9, 700, -700, .25, 8} {
+					h.Send(fego.Event{Kind: fego.Scroll, X: 60 * scale, Y: 120 * scale, DY: dy * scale})
+					checkRegionPixels(t, h)
+					h.Send(fego.Event{Kind: fego.Scroll, X: 60 * scale, Y: 400 * scale, DY: dy * scale})
+					checkRegionPixels(t, h)
+				}
+				if native && h.copies == 0 {
+					t.Fatal("native copy path never used")
+				}
+				h.Click(30, 25)
+				h.Type("中文 text")
+				checkRegionPixels(t, h)
+				doc.ShowToast("saved")
+				h.Step()
+				checkRegionPixels(t, h)
+				doc.ShowDialog(Dialog("modal", Text("content")))
+				h.Step()
+				checkRegionPixels(t, h)
+				doc.CloseDialog()
+				h.Step()
+				checkRegionPixels(t, h)
+				// A window that lost pixels asks for Paint; everything is repainted.
+				clear(h.screen.Pix)
+				before := h.regions
+				h.Send(fego.Event{Kind: fego.Paint})
+				checkRegionPixels(t, h)
+				if h.regions-before < 2 && scale > 1 {
+					t.Fatal("full repaint was not split into bounded bands")
+				}
+				// A Paint carrying the lost area repaints only that area.
+				doc.ShowToast("")
+				h.Step()
+				lost := image.Rect(37, 91, 245, 133)
+				draw.Draw(h.screen, lost, image.Black, image.Point{}, draw.Src)
+				h.uploaded = 0
+				h.Send(fego.Event{Kind: fego.Paint, X: float32(lost.Min.X), Y: float32(lost.Min.Y), Width: lost.Dx(), Height: lost.Dy()})
+				checkRegionPixels(t, h)
+				if h.uploaded != lost.Dx()*lost.Dy() {
+					t.Fatal("exposure repainted", h.uploaded, "pixels")
+				}
+				// An exposure before a queued scroll is presented cannot reuse copied pixels.
+				draw.Draw(h.screen, lost, image.Black, image.Point{}, draw.Src)
+				h.Document.live.input(fego.Event{Kind: fego.Scroll, X: 60 * scale, Y: 120 * scale, DY: 8 * scale})
+				if native && h.Document.live.scrolling == nil {
+					t.Fatal("queued scroll did not plan a pixel copy")
+				}
+				h.Send(fego.Event{Kind: fego.Paint, X: float32(lost.Min.X), Y: float32(lost.Min.Y), Width: lost.Dx(), Height: lost.Dy()})
+				checkRegionPixels(t, h)
+			})
+		}
+	}
+}
+
+func TestRegionBandReleasedAfterLargeFrames(t *testing.T) {
+	rows := List(1000, func(i int) string { return fmt.Sprint("Row ", i) }).Fill()
+	doc := View(rows)
+	h := &regionScreen{scrollScreen: &scrollScreen{Tester: &Tester{Document: doc, Width: 640, Height: 460, Scale: 1}, supported: true}}
+	doc.Mount(h)
+	h.Step()
+	v := h.Document.live
+	v.frame(false)
+	if cap(v.bandMem) <= smallBandBytes || v.bandTimer == nil {
+		t.Fatal("full repaint did not keep a large band under an idle timer", cap(v.bandMem))
+	}
+	v.trimBand()
+	if v.bandMem != nil {
+		t.Fatal("idle trim kept the large band")
+	}
+	h.Send(fego.Event{Kind: fego.Paint})
+	h.Send(fego.Event{Kind: fego.Scroll, X: 20, Y: 50, DY: 8})
+	if cap(v.bandMem) > smallBandBytes {
+		t.Fatal("a frame of small strips kept the large band", cap(v.bandMem))
+	}
+	h.Send(fego.Event{Kind: fego.Scroll, X: 20, Y: 50, DY: 8})
+	if cap(v.bandMem) == 0 || cap(v.bandMem) > smallBandBytes {
+		t.Fatal("small strips did not reuse a small band", cap(v.bandMem))
+	}
+	checkRegionPixels(t, h)
+	h.Close()
+	if v.bandMem != nil {
+		t.Fatal("closed view kept its band")
+	}
+}

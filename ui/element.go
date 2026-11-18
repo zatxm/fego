@@ -98,48 +98,69 @@ type style struct {
 // Element is owned by one view. Mutate it on the UI thread; use Window.Update
 // when data arrives from a goroutine. Children cannot be shared between parents.
 type Element struct {
-	id                                                           uint64
-	kind                                                         kind
-	layoutY                                                      float32
-	style                                                        style
-	parent                                                       *Element
-	children                                                     []*Element
-	view                                                         *view
-	rect, clip                                                   Rect
-	text, placeholder, label                                     string
-	disabled, hidden, primary, checked, multiline, password, tab bool
-	value, minimum, maximum                                      float64
-	selected                                                     int
-	options                                                      []string
-	count                                                        int
-	rowText                                                      func(int) string
-	columns                                                      []ColumnDef
-	rows                                                         [][]string
-	order                                                        []int
-	tree                                                         []*TreeNode
-	visibleTree                                                  []treeRow
-	expanded                                                     map[*TreeNode]bool
-	spans                                                        []Span
-	bitmap                                                       image.Image
-	draw                                                         func(*Painter)
-	onClick                                                      func()
-	onChange                                                     func(string)
-	onToggle                                                     func(bool)
-	onValue                                                      func(float64)
-	onSelect                                                     func(int)
-	onLink                                                       func(string)
-	scroll                                                       float32
-	scrollX, contentH                                            float32
-	scrollable                                                   bool
-	cursor, anchor                                               int
-	undo                                                         []string
-	undoBytes                                                    int
+	id               uint64
+	kind             kind
+	layoutY          float32
+	style            style
+	parent           *Element
+	children         []*Element
+	view             *view
+	rect, clip       Rect
+	text, label      string
+	disabled, hidden bool
+	onClick          func()
+	scroll, contentH float32
+	scrollable       bool
+	*widget          // control state; layout-only elements share noWidget
+}
+
+// widget holds state used by controls but not by plain boxes and labels.
+type widget struct {
+	placeholder                                string
+	primary, checked, multiline, password, tab bool
+	value, minimum, maximum                    float64
+	selected                                   int
+	options                                    []string
+	count                                      int
+	rowText                                    func(int) string
+	columns                                    []ColumnDef
+	rows                                       [][]string
+	order                                      []int
+	tree                                       []*TreeNode
+	visibleTree                                []treeRow
+	expanded                                   map[*TreeNode]bool
+	spans                                      []Span
+	bitmap                                     image.Image
+	draw                                       func(*Painter)
+	onChange                                   func(string)
+	onToggle                                   func(bool)
+	onValue                                    func(float64)
+	onSelect                                   func(int)
+	onLink                                     func(string)
+	scrollX                                    float32
+	cursor, anchor                             int
+	undo                                       []string
+	undoBytes                                  int
+}
+
+// noWidget is read-only; own gives an element private state before any write.
+var noWidget = widget{selected: -1}
+
+func (e *Element) own() *widget {
+	if e.widget == &noWidget {
+		e.widget = &widget{selected: -1}
+	}
+	return e.widget
 }
 
 var elementIDs atomic.Uint64
 
 func element(k kind) *Element {
-	return &Element{id: elementIDs.Add(1) << 32, kind: k, selected: -1, style: style{radius: 10, align: Stretch}}
+	e := &Element{id: elementIDs.Add(1) << 32, kind: k, style: style{radius: 10, align: Stretch}, widget: &noWidget}
+	if k != kBox && k != kText && k != kSeparator {
+		e.widget = &widget{selected: -1}
+	}
+	return e
 }
 func Box(children ...*Element) *Element    { return element(kBox).Children(children...) }
 func Column(children ...*Element) *Element { return Box(children...).Gap(12) }
@@ -180,22 +201,22 @@ func Button(s string, click func()) *Element {
 }
 func PrimaryButton(s string, click func()) *Element {
 	e := Button(s, click)
-	e.primary = true
+	e.own().primary = true
 	return e
 }
 func TextInput(s string) *Element {
 	e := element(kInput)
 	e.text = s
-	e.cursor = utf8.RuneCountInString(s)
-	e.anchor = e.cursor
+	e.own().cursor = utf8.RuneCountInString(s)
+	e.own().anchor = e.cursor
 	return e
 }
-func TextArea(s string) *Element   { e := TextInput(s); e.multiline = true; return e.Height(120) }
+func TextArea(s string) *Element   { e := TextInput(s); e.own().multiline = true; return e.Height(120) }
 func CodeEditor(s string) *Element { e := TextArea(s); e.kind = kEditor; return e.Height(240) }
 func Checkbox(s string, checked bool) *Element {
 	e := element(kCheck)
 	e.text = s
-	e.checked = checked
+	e.own().checked = checked
 	return e
 }
 func Switch(s string, checked bool) *Element { e := Checkbox(s, checked); e.kind = kSwitch; return e }
@@ -205,17 +226,17 @@ func Slider(value, low, high float64) *Element {
 		panic("ui: invalid slider range")
 	}
 	e := element(kSlider)
-	e.minimum, e.maximum = low, high
+	e.own().minimum, e.own().maximum = low, high
 	return e.SetValue(value)
 }
 func Progress(value float64) *Element {
 	e := element(kProgress)
-	e.maximum = 1
+	e.own().maximum = 1
 	return e.SetValue(value)
 }
 func Select(options []string, selected int) *Element {
 	e := element(kSelect)
-	e.options = append([]string(nil), options...)
+	e.own().options = append([]string(nil), options...)
 	e.SetSelected(selected)
 	return e
 }
@@ -227,8 +248,8 @@ func List(count int, text func(int) string) *Element {
 		panic("ui: invalid list source")
 	}
 	e := element(kList)
-	e.count = count
-	e.rowText = text
+	e.own().count = count
+	e.own().rowText = text
 	return e.Height(240)
 }
 
@@ -239,8 +260,8 @@ type ColumnDef struct {
 
 func Table(columns []ColumnDef, rows [][]string) *Element {
 	e := element(kTable)
-	e.columns = append([]ColumnDef(nil), columns...)
-	e.rows = rows
+	e.own().columns = append([]ColumnDef(nil), columns...)
+	e.own().rows = rows
 	return e.Height(260)
 }
 
@@ -255,15 +276,15 @@ type treeRow struct {
 
 func Tree(nodes ...*TreeNode) *Element {
 	e := element(kTree)
-	e.tree = nodes
-	e.expanded = map[*TreeNode]bool{}
+	e.own().tree = nodes
+	e.own().expanded = map[*TreeNode]bool{}
 	e.rebuildTree()
 	return e.Height(240)
 }
-func Image(img image.Image) *Element { e := element(kImage); e.bitmap = img; return e }
+func Image(img image.Image) *Element { e := element(kImage); e.own().bitmap = img; return e }
 func Canvas(width, height float32, draw func(*Painter)) *Element {
 	e := element(kCanvas)
-	e.draw = draw
+	e.own().draw = draw
 	return e.Size(width, height)
 }
 
@@ -276,7 +297,7 @@ type Span struct {
 
 func RichText(spans ...Span) *Element {
 	e := element(kRichText)
-	e.spans = append([]Span(nil), spans...)
+	e.own().spans = append([]Span(nil), spans...)
 	// Accessibility reuses the immutable plain text instead of joining spans every frame.
 	var text strings.Builder
 	for _, span := range spans {
@@ -367,13 +388,13 @@ func (e *Element) SetText(s string) *Element {
 		}
 		e.text = s
 		n := utf8.RuneCountInString(s)
-		e.cursor = min(e.cursor, n)
-		e.anchor = min(e.anchor, n)
+		e.own().cursor = min(e.cursor, n)
+		e.own().anchor = min(e.anchor, n)
 		if e.kind == kInput || e.kind == kEditor {
-			e.undo = nil
-			e.undoBytes = 0
+			e.own().undo = nil
+			e.own().undoBytes = 0
 			e.scroll = min(e.scroll, e.maxScroll())
-			e.scrollX = 0
+			e.own().scrollX = 0
 		}
 		e.touch(layout)
 	}
@@ -382,7 +403,7 @@ func (e *Element) SetText(s string) *Element {
 func (e *Element) Text() string { return e.text }
 func (e *Element) SetChecked(v bool) *Element {
 	if e.checked != v {
-		e.checked = v
+		e.own().checked = v
 		e.touch(false)
 	}
 	return e
@@ -394,7 +415,7 @@ func (e *Element) SetValue(v float64) *Element {
 	}
 	v = max(e.minimum, min(e.maximum, v))
 	if e.value != v {
-		e.value = v
+		e.own().value = v
 		e.touch(false)
 	}
 	return e
@@ -405,16 +426,16 @@ func (e *Element) SetSelected(i int) *Element {
 		panic("ui: selection outside options")
 	}
 	if e.selected != i {
-		e.selected = i
+		e.own().selected = i
 		e.touch(false)
 	}
 	return e
 }
 func (e *Element) Selected() int { return e.selected }
 func (e *Element) SetRows(rows [][]string) *Element {
-	e.rows = rows
-	e.order = nil
-	e.selected = -1
+	e.own().rows = rows
+	e.own().order = nil
+	e.own().selected = -1
 	e.scroll = 0
 	e.touch(false)
 	return e
@@ -423,8 +444,8 @@ func (e *Element) SetCount(n int) *Element {
 	if n < 0 {
 		panic("ui: negative list length")
 	}
-	e.count = n
-	e.selected = min(e.selected, n-1)
+	e.own().count = n
+	e.own().selected = min(e.selected, n-1)
 	e.scroll = min(e.scroll, e.maxScroll())
 	e.touch(false)
 	return e
@@ -509,15 +530,15 @@ func (e *Element) Hidden(hidden bool) *Element {
 	}
 	return e
 }
-func (e *Element) Placeholder(s string) *Element     { e.placeholder = s; e.touch(false); return e }
-func (e *Element) Password(secret bool) *Element     { e.password = secret; e.touch(false); return e }
+func (e *Element) Placeholder(s string) *Element     { e.own().placeholder = s; e.touch(false); return e }
+func (e *Element) Password(secret bool) *Element     { e.own().password = secret; e.touch(false); return e }
 func (e *Element) Label(s string) *Element           { e.label = s; e.touch(false); return e }
 func (e *Element) OnClick(fn func()) *Element        { e.onClick = fn; return e }
-func (e *Element) OnChange(fn func(string)) *Element { e.onChange = fn; return e }
-func (e *Element) OnToggle(fn func(bool)) *Element   { e.onToggle = fn; return e }
-func (e *Element) OnValue(fn func(float64)) *Element { e.onValue = fn; return e }
-func (e *Element) OnSelect(fn func(int)) *Element    { e.onSelect = fn; return e }
-func (e *Element) OnLink(fn func(string)) *Element   { e.onLink = fn; return e }
+func (e *Element) OnChange(fn func(string)) *Element { e.own().onChange = fn; return e }
+func (e *Element) OnToggle(fn func(bool)) *Element   { e.own().onToggle = fn; return e }
+func (e *Element) OnValue(fn func(float64)) *Element { e.own().onValue = fn; return e }
+func (e *Element) OnSelect(fn func(int)) *Element    { e.own().onSelect = fn; return e }
+func (e *Element) OnLink(fn func(string)) *Element   { e.own().onLink = fn; return e }
 func (e *Element) Bounds() Rect                      { return e.rect }
 func (e *Element) Refresh()                          { e.touch(false) }
 
@@ -530,7 +551,7 @@ func (e *Element) paintPadding(scale float32) int {
 }
 
 func (e *Element) rebuildTree() {
-	e.visibleTree = e.visibleTree[:0]
+	e.own().visibleTree = e.visibleTree[:0]
 	seen := make(map[*TreeNode]bool)
 	var walk func([]*TreeNode, int)
 	walk = func(nodes []*TreeNode, depth int) {
@@ -539,7 +560,7 @@ func (e *Element) rebuildTree() {
 				panic("ui: tree nodes must be non-nil and have one parent")
 			}
 			seen[n] = true
-			e.visibleTree = append(e.visibleTree, treeRow{n, depth})
+			e.own().visibleTree = append(e.visibleTree, treeRow{n, depth})
 			if e.expanded[n] {
 				walk(n.Children, depth+1)
 			}
@@ -547,6 +568,6 @@ func (e *Element) rebuildTree() {
 	}
 	walk(e.tree, 0)
 	if cap(e.visibleTree) > max(256, len(e.visibleTree)*4) {
-		e.visibleTree = append([]treeRow(nil), e.visibleTree...)
+		e.own().visibleTree = append([]treeRow(nil), e.visibleTree...)
 	}
 }

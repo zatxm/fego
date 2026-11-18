@@ -20,6 +20,21 @@ type Chart struct {
 	low, high float64
 	count     int
 	hasData   bool
+	// Reduced shapes are reused by every paint band until data or plot changes.
+	version  uint64
+	traceKey chartTraceKey
+	traces   [][]tracePoint
+	barRects [][]Rect
+}
+
+type chartTraceKey struct {
+	version uint64
+	plot    Rect
+}
+
+type tracePoint struct {
+	x, y         float32
+	connect, dot bool
 }
 
 func LineChart(series ...Series) *Chart { return newChart(false, series) }
@@ -40,6 +55,7 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 	} else {
 		c.series = c.series[:len(series)]
 	}
+	c.version++
 	c.low, c.high, c.count, c.hasData = math.Inf(1), math.Inf(-1), 0, false
 	for i, s := range series {
 		var values []float64
@@ -121,17 +137,47 @@ func (c *Chart) paintChart(p *Painter) {
 		tw, _ := p.Measure(label, 10, false)
 		p.Label(label, x-tw/2, plot.Y+plot.H+8, 10, p.theme.Muted, false)
 	}
+	if c.traceKey != (chartTraceKey{c.version, plot}) {
+		c.traceKey = chartTraceKey{c.version, plot}
+		if c.bars {
+			c.barRects = resizeShapes(c.barRects, len(c.series))
+		} else {
+			c.traces = resizeShapes(c.traces, len(c.series))
+		}
+		for i, series := range c.series {
+			if c.bars {
+				c.barRects[i] = c.barShapes(c.barRects[i][:0], plot, series.Values, i)
+			} else {
+				c.traces[i] = c.trace(c.traces[i][:0], plot, series.Values)
+			}
+		}
+	}
+	radius := float32(0)
+	if c.bars {
+		radius = min(3, c.barWidth(plot)/3)
+	}
 	for i, series := range c.series {
 		ink := series.Color
 		if ink.A == 0 {
 			ink = colors[i%len(colors)]
 		}
 		if c.bars {
-			c.paintBars(p, plot, series.Values, i, ink)
+			for _, r := range c.barRects[i] {
+				p.RoundRect(r, radius, ink)
+			}
 		} else {
-			c.paintLine(p, plot, series.Values, ink)
+			paintTrace(p, c.traces[i], ink)
 		}
 	}
+}
+
+// resizeShapes keeps per-series buffers and drops ones for removed series.
+func resizeShapes[T any](shapes [][]T, n int) [][]T {
+	if cap(shapes) < n {
+		shapes = make([][]T, n)
+	}
+	clear(shapes[n:cap(shapes)])
+	return shapes[:n]
 }
 
 func (c *Chart) y(value float64, plot Rect) float32 {
@@ -150,16 +196,30 @@ func (c *Chart) x(index int, plot Rect) float32 {
 	return plot.X + plot.W*float32(index)/float32(c.count-1)
 }
 
+func paintTrace(p *Painter, trace []tracePoint, ink Color) {
+	var previous tracePoint
+	for _, point := range trace {
+		if point.connect {
+			p.Line(previous.x, previous.y, point.x, point.y, 2, ink)
+		}
+		if point.dot {
+			p.Circle(point.x, point.y, 3.2, p.theme.Surface)
+			p.Circle(point.x, point.y, 2, ink)
+		}
+		previous = point
+	}
+}
+
 // Dense traces retain each pixel column's first, last, minimum and maximum
 // samples; narrow spikes survive without painting a line for every sample.
-func (c *Chart) paintLine(p *Painter, plot Rect, values []float64, ink Color) {
+func (c *Chart) trace(trace []tracePoint, plot Rect, values []float64) []tracePoint {
 	type point struct {
 		i int
 		v float64
 	}
 	var first, last, low, high point
 	bucket, haveBucket := 0, false
-	previousX, previousY, connected := float32(0), float32(0), false
+	connected := false
 	flush := func() {
 		if !haveBucket {
 			return
@@ -175,14 +235,8 @@ func (c *Chart) paintLine(p *Painter, plot Rect, values []float64, ink Color) {
 				continue
 			}
 			x, y := c.x(value.i, plot), c.y(value.v, plot)
-			if connected {
-				p.Line(previousX, previousY, x, y, 2, ink)
-			}
-			if !connected || c.count <= 80 {
-				p.Circle(x, y, 3.2, p.theme.Surface)
-				p.Circle(x, y, 2, ink)
-			}
-			previousX, previousY, connected = x, y, true
+			trace = append(trace, tracePoint{x, y, connected, !connected || c.count <= 80})
+			connected = true
 		}
 		haveBucket = false
 	}
@@ -211,12 +265,21 @@ func (c *Chart) paintLine(p *Painter, plot Rect, values []float64, ink Color) {
 		}
 	}
 	flush()
+	return trace
 }
 
-func (c *Chart) paintBars(p *Painter, plot Rect, values []float64, series int, ink Color) {
-	groups := min(c.count, max(1, int(plot.W/float32(max(4, len(c.series)*3)))))
+func (c *Chart) barGroups(plot Rect) int {
+	return min(c.count, max(1, int(plot.W/float32(max(4, len(c.series)*3)))))
+}
+
+func (c *Chart) barWidth(plot Rect) float32 {
+	return plot.W / float32(c.barGroups(plot)) * .75 / float32(len(c.series))
+}
+
+func (c *Chart) barShapes(rects []Rect, plot Rect, values []float64, series int) []Rect {
+	groups := c.barGroups(plot)
 	step := plot.W / float32(groups)
-	width := step * .75 / float32(len(c.series))
+	width := c.barWidth(plot)
 	base := c.y(0, plot)
 	for group := range groups {
 		start, end := group*c.count/groups, (group+1)*c.count/groups
@@ -231,6 +294,7 @@ func (c *Chart) paintBars(p *Painter, plot Rect, values []float64, series int, i
 		}
 		top, bottom := min(base, c.y(high, plot)), max(base, c.y(low, plot))
 		x := plot.X + float32(group)*step + step*.125 + float32(series)*width
-		p.RoundRect(Rect{x, top, max(1, width-1), max(1, bottom-top)}, min(3, width/3), ink)
+		rects = append(rects, Rect{x, top, max(1, width-1), max(1, bottom-top)})
 	}
+	return rects
 }

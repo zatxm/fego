@@ -215,6 +215,31 @@ func (w *Window) Present(img *image.RGBA, damage []image.Rectangle) {
 		return
 	}
 	w.native.Present(img, damage)
+	w.presented()
+}
+
+// RetainsPixels reports whether PresentRegion is available. Such windows keep
+// presented pixels and send a Paint event after losing them, so content may
+// present only damaged regions instead of retaining a full-window image.
+func (w *Window) RetainsPixels() bool {
+	_, ok := w.native.(platform.RegionPresenter)
+	return ok
+}
+
+// PresentRegion uploads img at its bounds, in window device pixels. It is an
+// optional host method, called on the UI thread when RetainsPixels is true;
+// img is borrowed for the call and must not be retained.
+func (w *Window) PresentRegion(img *image.RGBA) {
+	if w.closed {
+		return
+	}
+	if native, ok := w.native.(platform.RegionPresenter); ok {
+		native.PresentRegion(img)
+		w.presented()
+	}
+}
+
+func (w *Window) presented() {
 	if !w.ready {
 		w.ready = true
 		for _, fn := range w.onReady {
