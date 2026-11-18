@@ -20,7 +20,7 @@ fego provides windows, layouts, forms, data views, text editing, and light and d
 | Windows | Win32 | amd64, arm64 |
 | macOS | Cocoa | amd64, arm64 |
 
-CI runs native window tests on Linux amd64, Windows amd64, and macOS arm64. Other targets are checked through cross-compilation.
+CI is started manually from the [Actions page](https://github.com/zatxm/fego/actions/workflows/ci.yml). It runs native window tests on Linux amd64, Windows amd64, and macOS arm64, and checks other targets through cross-compilation.
 
 Linux requires X11 or XWayland at runtime; when `libXext` and a local server provide MIT-SHM, window updates use shared memory and otherwise fall back to regular uploads. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
 

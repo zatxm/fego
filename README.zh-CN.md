@@ -20,7 +20,7 @@ fego 是用 Go 编写的桌面 UI 工具包，提供窗口、布局、表单、�
 | Windows | Win32 | amd64、arm64 |
 | macOS | Cocoa | amd64、arm64 |
 
-CI 包含 Linux amd64、Windows amd64 和 macOS arm64 的原生窗口测试，其他目标进行交叉构建检查。
+CI 通过 [Actions 页面](https://github.com/zatxm/fego/actions/workflows/ci.yml)手动运行，包含 Linux amd64、Windows amd64 和 macOS arm64 的原生窗口测试，其他目标进行交叉构建检查。
 
 Linux 运行时需要 X11 或 XWayland；本地服务器与 `libXext` 支持 MIT-SHM 时，窗口更新使用共享内存，否则回退为普通上传。中文显示需要系统中文字体，建议安装 Noto Sans CJK；Windows 和 macOS 使用系统字体。没有可用的系统拉丁字体时，会回退到内嵌 Go 字体。
 
