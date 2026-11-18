@@ -85,6 +85,7 @@ type view struct {
 	dialog                  *Element
 	returnFocus             *Element
 	toast                   string
+	tip                     tooltip
 	frames, paints          uint64
 	access                  map[uint64]accessTarget
 	accessNodes             []fego.AccessNode
@@ -94,6 +95,7 @@ type view struct {
 }
 
 func (v *view) Close() {
+	v.dismissTip()
 	v.rowLabels = nil
 	v.img = nil
 	v.bandMu.Lock()
@@ -302,6 +304,7 @@ func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
 		p.RoundRect(rr, 10, v.theme.Text)
 		p.Label(v.toast, rr.X+18, rr.Y+12, v.theme.FontSize, v.theme.Surface, true)
 	}
+	v.paintTip(p)
 }
 
 // Stats helps tests distinguish event-driven repainting from an idle frame loop.
@@ -377,6 +380,7 @@ func (v *view) Event(e fego.Event) {
 		if !e.Focused {
 			v.pressed = nil
 			v.scrollDrag = nil
+			v.dismissTip()
 		}
 		if v.focused != nil {
 			v.invalidate(v.focused, false)

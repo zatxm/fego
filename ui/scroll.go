@@ -31,7 +31,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 	if localLayout {
 		opaque = exactShift && (e.style.bgSet && e.style.bg.A == 255 || e == v.root && v.theme.Background.A == 255) && scrollCopySafe(e)
 	}
-	if !clean || !opaque || v.dialog != nil || v.popup != nil || v.toast != "" {
+	if !clean || !opaque || v.dialog != nil || v.popup != nil || v.toast != "" || v.tip.shown {
 		return
 	}
 	delta := (old - next) * v.scale

@@ -107,6 +107,7 @@ type Element struct {
 	view             *view
 	rect, clip       Rect
 	text, label      string
+	tooltip          string
 	disabled, hidden bool
 	onClick          func()
 	scroll, contentH float32

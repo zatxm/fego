@@ -6,6 +6,7 @@ import (
 	"image"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/zatxm/fego/internal/platform"
 )
@@ -275,6 +276,20 @@ func (w *Window) Invalidate() {
 			}
 		}
 	})
+}
+
+// After runs fn on the UI thread once d has elapsed, unless the window has
+// closed or the returned cancel function ran first. Call cancel on the UI thread.
+func (w *Window) After(d time.Duration, fn func()) (cancel func()) {
+	cancelled := false
+	timer := time.AfterFunc(d, func() {
+		w.app.Post(func() {
+			if !cancelled && !w.closed {
+				fn()
+			}
+		})
+	})
+	return func() { cancelled = true; timer.Stop() }
 }
 
 func (w *Window) OnReady(fn func()) {

@@ -41,6 +41,10 @@ func (v *view) forget(subtree *Element) {
 		v.hover = nil
 		v.host.SetCursor("default")
 	}
+	if inside(v.tip.target) {
+		v.dismissTip()
+		v.tip.target = nil
+	}
 	if v.popup != nil && inside(v.popup.owner) {
 		v.popup = nil
 		v.invalidate(v.root, false)
@@ -95,6 +99,11 @@ func (v *view) input(ev fego.Event) {
 	if ev.Kind == fego.PointerMove || ev.Kind == fego.PointerDown || ev.Kind == fego.PointerUp {
 		v.pointerX, v.pointerY = x, y
 	}
+	switch ev.Kind {
+	case fego.PointerDown, fego.Scroll, fego.KeyDown:
+		// Acting on the element replaces the hint until the pointer moves on.
+		v.dismissTip()
+	}
 	if v.popup != nil && v.popupInput(ev, x, y) {
 		return
 	}
@@ -103,6 +112,9 @@ func (v *view) input(ev fego.Event) {
 		if v.scrollDrag != nil {
 			v.dragScroll(y)
 			return
+		}
+		if v.popup == nil {
+			v.trackTip(root, x, y)
 		}
 		e := hit(root, x, y)
 		if e != v.hover {

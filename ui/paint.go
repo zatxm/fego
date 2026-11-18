@@ -382,7 +382,9 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	if p.clip.Empty() {
 		return
 	}
-	if s.borderSet {
+	// A transparent border color removes the border instead of filling the
+	// element with the theme border under a translucent background.
+	if s.borderSet && s.border.A != 0 {
 		p.RoundRect(r, s.radius, border)
 		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, max(0, s.radius-1), bg)
 	} else if bg.A != 0 {
