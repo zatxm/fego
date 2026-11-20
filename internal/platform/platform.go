@@ -31,14 +31,15 @@ type Event struct {
 	Key                        string
 	Text                       string
 	Shift, Control, Alt, Super bool
-	Focused                    bool
+	Focused, Destroyed         bool
 	AccessID                   uint64
 	Action                     string
 }
 
 type Options struct {
-	Title         string
-	Width, Height int
+	Title, AppID       string
+	Width, Height      int
+	Icon, TitleBarIcon *image.NRGBA
 }
 
 // All methods except Wake run on the main thread. Wake may run on any goroutine.

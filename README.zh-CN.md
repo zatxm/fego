@@ -84,6 +84,16 @@ go run ./examples/gallery -dark
 go run ./examples/gallery -snapshot gallery.png
 ```
 
+## 系统托盘与多窗口
+
+在支持托盘的桌面会话运行 `go run ./examples/tray`。示例从托盘启动，可以通过菜单打开窗口。关闭窗口后应用仍在后台运行，从托盘选择 **Quit** 可退出。
+
+在 `Run` 前设置 `AppOptions.ID`、`Name` 和 `Icon`。Linux 的 ID 要与应用启动项的 `StartupWMClass` 一致。Windows 安装包的快捷方式使用相同的 AppUserModelID。macOS 的应用包标识写在 Info.plist 中。文件管理器显示的应用图标由应用包和安装包提供。
+
+用 `Window.Show`、`Hide` 和 `Activate` 控制指定窗口。用 `Window.OnClose` 拦截关闭请求。`AppOptions.KeepAlive` 允许应用在零窗口时继续运行，`app.Quit()` 退出整个应用。
+
+在 UI 线程创建托盘、更新菜单。后台 goroutine 通过 `app.Post` 提交更新。Linux 会话需要支持 StatusNotifierItem 的托盘宿主，可通过 `Tray.Available()` 查询。单击和提示文字的呈现方式由桌面决定。macOS 菜单栏上绑定了菜单的图标单击后会打开系统菜单。
+
 ## 控件与功能
 
 | 类别 | 接口 |

@@ -84,6 +84,16 @@ go run ./examples/gallery -dark
 go run ./examples/gallery -snapshot gallery.png
 ```
 
+## System tray and multiple windows
+
+Run `go run ./examples/tray` inside a desktop session with tray support. The example starts in the tray, opens a window from its menu and keeps running after that window closes. Choose **Quit** from the tray to exit.
+
+Set `AppOptions.ID`, `Name` and `Icon` before `Run`. On Linux, match the ID to your desktop entry's `StartupWMClass`. On Windows, use the same AppUserModelID for packaged shortcuts. On macOS, set the bundle identifier in the app's Info.plist. The bundle and installer also provide the icon shown by the file manager.
+
+Use `Window.Show`, `Hide` and `Activate` to control a specific window. Register `Window.OnClose` to intercept a close request. `AppOptions.KeepAlive` allows apps to run with no windows and `app.Quit()` exits the whole app.
+
+Create trays and update their menus on the UI thread. From worker goroutines, use `app.Post`. Linux needs a StatusNotifierItem host on the session bus. `Tray.Available()` reports whether a host is available. Primary click and tooltip presentation depend on the desktop. The macOS menu bar opens an attached native menu on click.
+
 ## Widgets and features
 
 | Category | APIs |

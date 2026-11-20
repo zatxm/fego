@@ -108,6 +108,8 @@ type windowsBackend struct {
 	wake, instance uintptr
 	windows        map[uintptr]*windowsWindow
 	creating       *windowsWindow
+	trays          map[uintptr]*windowsTray
+	taskbarCreated uint32
 	closed         atomic.Bool
 }
 type windowsWindow struct {
@@ -116,6 +118,7 @@ type windowsWindow struct {
 
 	backend                  *windowsBackend
 	hwnd, paintDC, cursor    uintptr
+	icons                    [2]uintptr
 	events                   func(Event)
 	frame                    *image.RGBA
 	highSurrogate            uint16
@@ -177,7 +180,13 @@ func (b *windowsBackend) Open(o Options, events func(Event)) (Window, error) {
 	}
 	w.hwnd = hwnd
 	b.windows[hwnd] = w
-	winUser.NewProc("ShowWindow").Call(hwnd, 5)
+	if o.Icon != nil {
+		if err := w.setIcon(o.Icon); err != nil {
+			w.Close()
+			return nil, err
+		}
+	}
+	winShow.Call(hwnd, 5)
 	w.resized()
 	return w, nil
 }
@@ -185,6 +194,9 @@ func (b *windowsBackend) Open(o Options, events func(Event)) (Window, error) {
 func (b *windowsBackend) Run() error {
 	defer func() {
 		b.closed.Store(true)
+		for _, tray := range b.trays {
+			tray.Close()
+		}
 		for _, w := range b.windows {
 			w.Close()
 		}
@@ -391,6 +403,7 @@ func (w *windowsWindow) Close() {
 			w.access = nil
 		}
 		winDestroy.Call(w.hwnd)
+		w.releaseIcons()
 		delete(w.backend.windows, w.hwnd)
 		w.frame = nil
 	}
@@ -453,6 +466,9 @@ func windowProcedure(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 		}
 		return 0
 	}
+	if t := b.trays[hwnd]; t != nil && t.handle(message, wp, lp) {
+		return 0
+	}
 	w := b.windows[hwnd]
 	if w == nil && message == 0x81 && b.creating != nil {
 		w = b.creating
@@ -491,11 +507,14 @@ func windowProcedure(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 		return 0
 	case 0x02:
 		delete(b.windows, hwnd)
-		w.closed = true
+		if !w.closed {
+			w.closed = true
+			w.releaseIcons()
+			emit(Event{Kind: Close, Destroyed: true})
+		}
 		return 0
 	case 0x10:
 		emit(Event{Kind: Close})
-		w.Close()
 		return 0
 	case 0x07:
 		emit(Event{Kind: Focus, Focused: true})

@@ -123,6 +123,7 @@ var xl struct {
 	createWindow         func(uintptr, uintptr, int32, int32, uint32, uint32, uint32, uintptr, uintptr) uintptr
 	destroyWindow        func(uintptr, uintptr) int32
 	mapWindow            func(uintptr, uintptr) int32
+	unmapWindow          func(uintptr, uintptr) int32
 	selectInput          func(uintptr, uintptr, int64) int32
 	storeName            func(uintptr, uintptr, string) int32
 	resizeWindow         func(uintptr, uintptr, uint32, uint32) int32
@@ -197,7 +198,7 @@ func loadX11() error {
 			dest any
 		}{
 			{"XTranslateCoordinates", &xl.translateCoordinates}, {"XOpenDisplay", &xl.openDisplay}, {"XCloseDisplay", &xl.closeDisplay}, {"XDefaultScreen", &xl.defaultScreen}, {"XRootWindow", &xl.rootWindow}, {"XDefaultVisual", &xl.defaultVisual}, {"XDefaultDepth", &xl.defaultDepth}, {"XConnectionNumber", &xl.connection}, {"XResourceManagerString", &xl.resources},
-			{"XCreateSimpleWindow", &xl.createWindow}, {"XDestroyWindow", &xl.destroyWindow}, {"XMapWindow", &xl.mapWindow}, {"XSelectInput", &xl.selectInput}, {"XStoreName", &xl.storeName}, {"XResizeWindow", &xl.resizeWindow}, {"XCreateGC", &xl.createGC}, {"XFreeGC", &xl.freeGC}, {"XCreateImage", &xl.createImage}, {"XDestroyImage", &xl.destroyImage}, {"XCopyArea", &xl.copyArea},
+			{"XCreateSimpleWindow", &xl.createWindow}, {"XDestroyWindow", &xl.destroyWindow}, {"XMapWindow", &xl.mapWindow}, {"XUnmapWindow", &xl.unmapWindow}, {"XSelectInput", &xl.selectInput}, {"XStoreName", &xl.storeName}, {"XResizeWindow", &xl.resizeWindow}, {"XCreateGC", &xl.createGC}, {"XFreeGC", &xl.freeGC}, {"XCreateImage", &xl.createImage}, {"XDestroyImage", &xl.destroyImage}, {"XCopyArea", &xl.copyArea},
 			{"XFlush", &xl.flush}, {"XPending", &xl.pending}, {"XNextEvent", &xl.nextEvent}, {"XFilterEvent", &xl.filterEvent}, {"XInternAtom", &xl.internAtom}, {"XSetWMProtocols", &xl.setProtocols}, {"XChangeProperty", &xl.changeProperty}, {"XGetWindowProperty", &xl.getProperty}, {"XDeleteProperty", &xl.deleteProperty}, {"XGetSelectionOwner", &xl.selectionOwner}, {"XSetSelectionOwner", &xl.setSelectionOwner}, {"XConvertSelection", &xl.convertSelection}, {"XSendEvent", &xl.sendEvent}, {"XFree", &xl.free},
 			{"XCreateFontCursor", &xl.createCursor}, {"XDefineCursor", &xl.defineCursor}, {"XFreeCursor", &xl.freeCursor}, {"XLookupKeysym", &xl.lookupKeysym}, {"XLookupString", &xl.lookupString}, {"XSetLocaleModifiers", &xl.setLocaleModifiers}, {"XOpenIM", &xl.openIM}, {"XCloseIM", &xl.closeIM}, {"XCreateIC", &xl.createIC}, {"XDestroyIC", &xl.destroyIC}, {"XSetICFocus", &xl.setICFocus}, {"XUnsetICFocus", &xl.unsetICFocus}, {"Xutf8LookupString", &xl.utf8Lookup}, {"XVaCreateNestedList", &xl.nestedList}, {"XSetICValues", &xl.setICValues}, {"XSetErrorHandler", &xl.setErrorHandler}, {"XkbSetDetectableAutoRepeat", &xl.detectRepeat},
 		} {
@@ -399,6 +400,7 @@ func (b *xBackend) Open(o Options, emit func(Event)) (Window, error) {
 		x.ic = xl.createIC(b.im, "inputStyle", 0x408, "clientWindow", id, "focusWindow", id, 0)
 	}
 	x.SetTitle(o.Title)
+	x.setIdentity(o)
 	xl.mapWindow(b.display, id)
 	xl.flush(b.display)
 	emit(Event{Kind: Resize, Width: w, Height: h, Scale: b.scale})
@@ -627,7 +629,7 @@ func (b *xBackend) event(raw *xEvent) {
 		}
 	case xDestroy:
 		w.dispose(false)
-		w.emit(Event{Kind: Close})
+		w.emit(Event{Kind: Close, Destroyed: true})
 	case xFocusIn, xFocusOut:
 		w.focused = a.Kind == xFocusIn
 		if w.ic != 0 {

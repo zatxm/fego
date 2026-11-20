@@ -205,3 +205,96 @@ func TestTextInputSkipsOnlyRepeatedDisabledState(t *testing.T) {
 		t.Fatal("closed window received input changes")
 	}
 }
+
+func TestKeepAliveAndCloseVeto(t *testing.T) {
+	app := NewAppWithOptions(AppOptions{KeepAlive: true})
+	backend := &testBackend{}
+	app.backend = backend
+
+	open := func() *Window {
+		w, err := app.NewWindow(WindowOptions{Content: &testContent{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return w
+	}
+	window := open()
+	window.OnClose(func(e *CloseEvent) { e.PreventDefault() })
+	backend.windows[0].event(Event{Kind: Close})
+	if window.closed {
+		t.Fatal("OS close ignored the application's veto")
+	}
+	window.Destroy()
+	app.dispatch()
+	if !window.closed || len(app.windows) != 0 || backend.quits != 0 {
+		t.Fatal("keep-alive stopped after the last window was destroyed")
+	}
+	window = open()
+	window.OnClose(func(e *CloseEvent) { e.PreventDefault() })
+	backend.windows[1].event(Event{Kind: Close, Destroyed: true})
+	if !window.closed {
+		t.Fatal("the OS already destroyed the native window")
+	}
+	app.Quit()
+	app.dispatch()
+	if backend.quits != 1 {
+		t.Fatal("explicit quit must exit keep-alive mode")
+	}
+}
+
+type fakeTrayBackend struct {
+	testBackend
+	tray *fakeTray
+}
+
+func (*fakeTrayBackend) Configure(string, string, *image.NRGBA) error { return nil }
+func (b *fakeTrayBackend) NewTray(s platform.TrayState, click func(int32)) (platform.Tray, error) {
+	b.tray = &fakeTray{state: s, click: click}
+	return b.tray, nil
+}
+
+type fakeTray struct {
+	state  platform.TrayState
+	click  func(int32)
+	closed bool
+}
+
+func (t *fakeTray) Update(s platform.TrayState) error { t.state = s; return nil }
+func (t *fakeTray) Available() bool                   { return !t.closed }
+func (t *fakeTray) Close()                            { t.closed = true }
+
+func TestTrayMenusIgnoreStaleAndDisabledClicks(t *testing.T) {
+	app := NewAppWithOptions(AppOptions{KeepAlive: true})
+	backend := &fakeTrayBackend{}
+	app.backend = backend
+	icon := image.NewRGBA(image.Rect(0, 0, 16, 16))
+	oldCalls, newCalls := 0, 0
+	tray, err := app.NewTray(TrayOptions{Icon: icon, Menu: Menu{
+		{Label: "Old", OnClick: func() { oldCalls++ }},
+		{Label: "Disabled", Disabled: true, Submenu: Menu{{Label: "Child", OnClick: func() { oldCalls++ }}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, disabled := backend.tray.state.Menu[0].ID, backend.tray.state.Menu[1].Submenu[0].ID
+	backend.tray.click(disabled)
+	backend.tray.click(old)
+	app.dispatch()
+	if oldCalls != 1 {
+		t.Fatalf("old action count = %d", oldCalls)
+	}
+	backend.tray.click(old)
+	if err := tray.SetMenu(Menu{{Label: "New", Checkable: true, Checked: true, OnClick: func() { newCalls++ }}}); err != nil {
+		t.Fatal(err)
+	}
+	backend.tray.click(backend.tray.state.Menu[0].ID)
+	app.dispatch()
+	if oldCalls != 1 || newCalls != 1 {
+		t.Fatalf("stale, disabled or current action mismatch: old=%d new=%d", oldCalls, newCalls)
+	}
+	app.Quit()
+	app.dispatch()
+	if tray.Available() || !backend.tray.closed {
+		t.Fatal("quit leaked a tray")
+	}
+}

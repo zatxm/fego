@@ -53,6 +53,16 @@ type WindowOptions struct {
 	Title         string
 	Width, Height int // initial logical pixels
 	Content       Content
+	Icon          image.Image // overrides the application icon
+	TitleBarIcon  image.Image // optional title-bar accessory on macOS
+}
+
+// AppOptions sets application identity and lifetime before Run.
+type AppOptions struct {
+	ID        string
+	Name      string
+	Icon      image.Image
+	KeepAlive bool
 }
 
 type Application struct {
@@ -60,13 +70,32 @@ type Application struct {
 	queue            []func()
 	spareQueue       []func()
 	backend          platform.Backend
+	options          AppOptions
+	icon             *image.NRGBA
+	trays            map[*Tray]struct{}
 	ready            []func()
 	windows          map[*Window]struct{}
 	running, stopped bool
+	quitting         bool
 	err              error
 }
 
-func NewApp() *Application { return &Application{windows: make(map[*Window]struct{})} }
+func NewApp() *Application { return NewAppWithOptions(AppOptions{}) }
+
+func NewAppWithOptions(o AppOptions) *Application {
+	return &Application{options: o, windows: make(map[*Window]struct{})}
+}
+
+// SetOptions configures an application, including the default App, before Run.
+func (a *Application) SetOptions(o AppOptions) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.running {
+		return errors.New("fego: set app options before Run")
+	}
+	a.options = o
+	return nil
+}
 
 // App is the default application. Run must be called from main.
 var App = NewApp()
@@ -87,10 +116,19 @@ func (a *Application) Run() error {
 		a.queue = nil
 		a.spareQueue = nil
 		a.mu.Unlock()
+		for tray := range a.trays {
+			tray.Close()
+		}
 		for w := range a.windows {
 			w.destroy()
 		}
 	}()
+	appIcon, err := platform.CopyIcon(a.options.Icon)
+	if err != nil {
+		return err
+	}
+	a.options.Icon = nil
+	a.icon = appIcon
 	b, err := platform.New(a.dispatch)
 	if err != nil {
 		return err
@@ -98,16 +136,21 @@ func (a *Application) Run() error {
 	a.mu.Lock()
 	a.backend = b
 	a.mu.Unlock()
-	for _, fn := range a.ready {
-		fn()
+	if desktop, ok := b.(platform.DesktopBackend); ok {
+		a.err = desktop.Configure(a.options.ID, a.options.Name, a.icon)
+	}
+	if a.err == nil {
+		for _, fn := range a.ready {
+			fn()
+		}
 	}
 	a.ready = nil
-	if a.err == nil && len(a.windows) == 0 {
+	if a.err == nil && len(a.windows) == 0 && !a.options.KeepAlive {
 		a.err = errors.New("fego: no window opened in WhenReady")
 	}
 	a.dispatch()
 	if a.err != nil {
-		b.Quit()
+		a.quit()
 	}
 	return errors.Join(a.err, b.Run())
 }
@@ -145,11 +188,22 @@ func (a *Application) dispatch() {
 	a.mu.Unlock()
 }
 
-func (a *Application) Quit() { a.Post(func() { a.backend.Quit() }) }
+func (a *Application) Quit() { a.Post(a.quit) }
+
+func (a *Application) quit() {
+	if a.quitting {
+		return
+	}
+	a.quitting = true
+	for tray := range a.trays {
+		tray.Close()
+	}
+	a.backend.Quit()
+}
 
 // NewWindow is called on the UI thread, normally from WhenReady or a callback.
 func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
-	if a.backend == nil {
+	if a.backend == nil || a.stopped || a.quitting {
 		return nil, errors.New("fego: open windows from WhenReady")
 	}
 	if o.Content == nil {
@@ -161,8 +215,26 @@ func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
 	if o.Height <= 0 {
 		o.Height = 640
 	}
+	icon := a.icon
+	if o.Icon != nil {
+		var err error
+		icon, err = platform.CopyIcon(o.Icon)
+		if err != nil {
+			return nil, err
+		}
+	}
+	titleBarIcon, err := platform.CopyIcon(o.TitleBarIcon)
+	if err != nil {
+		return nil, err
+	}
+	if o.Title == "" {
+		o.Title = a.options.Name
+	}
 	w := &Window{app: a, width: o.Width, height: o.Height, scale: 1}
-	n, err := a.backend.Open(platform.Options{Title: o.Title, Width: o.Width, Height: o.Height}, w.event)
+	n, err := a.backend.Open(platform.Options{
+		Title: o.Title, Width: o.Width, Height: o.Height, AppID: a.options.ID,
+		Icon: icon, TitleBarIcon: titleBarIcon,
+	}, w.event)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +260,7 @@ type Window struct {
 	scale                  float32
 	closed, invalid, ready bool
 	onReady                []func()
+	onClose                func(*CloseEvent)
 	textInputDisabled      bool
 }
 
@@ -202,7 +275,11 @@ func (w *Window) event(e Event) {
 		}
 	}
 	if e.Kind == Close {
-		w.destroy()
+		if e.Destroyed {
+			w.destroy()
+		} else {
+			w.requestClose()
+		}
 		return
 	}
 	if w.view != nil {
@@ -343,6 +420,48 @@ func (w *Window) SetAccessibility(nodes []AccessNode) {
 		native.SetAccessibility(nodes)
 	}
 }
+
+// CloseEvent allows a user-initiated close to be canceled.
+type CloseEvent struct{ prevented bool }
+
+func (e *CloseEvent) PreventDefault() { e.prevented = true }
+
+// OnClose sets the close handler. Set it on the UI thread.
+func (w *Window) OnClose(fn func(*CloseEvent)) { w.onClose = fn }
+
+// Close requests a normal close through the UI event loop.
+func (w *Window) Close() { w.app.Post(w.requestClose) }
+
+func (w *Window) requestClose() {
+	if w.closed {
+		return
+	}
+	var e CloseEvent
+	if w.onClose != nil {
+		w.onClose(&e)
+	}
+	if !e.prevented {
+		w.destroy()
+	}
+}
+
+func (w *Window) Show() { w.control(platform.WindowControls.Show) }
+func (w *Window) Hide() { w.control(platform.WindowControls.Hide) }
+
+// Activate shows the window, restores it from minimization and requests focus.
+func (w *Window) Activate() { w.control(platform.WindowControls.Activate) }
+
+func (w *Window) control(fn func(platform.WindowControls)) {
+	w.app.Post(func() {
+		if !w.closed {
+			if native, ok := w.native.(platform.WindowControls); ok {
+				fn(native)
+			}
+		}
+	})
+}
+
+// Destroy closes the window without calling its close handler.
 func (w *Window) Destroy() { w.app.Post(w.destroy) }
 
 func (w *Window) destroy() {
@@ -351,6 +470,7 @@ func (w *Window) destroy() {
 	}
 	w.closed = true
 	w.onReady = nil
+	w.onClose = nil
 	if w.view != nil {
 		w.view.Close()
 		w.view = nil
@@ -359,7 +479,7 @@ func (w *Window) destroy() {
 		w.native.Close()
 	}
 	delete(w.app.windows, w)
-	if len(w.app.windows) == 0 && !w.app.stopped {
-		w.app.backend.Quit()
+	if len(w.app.windows) == 0 && !w.app.stopped && !w.app.options.KeepAlive {
+		w.app.quit()
 	}
 }

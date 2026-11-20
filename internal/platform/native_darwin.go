@@ -229,6 +229,7 @@ type cocoaBackend struct {
 	windows            map[objc.ID]*cocoaWindow
 	views              map[objc.ID]*cocoaWindow
 	delegates          map[objc.ID]*cocoaWindow
+	trays              map[objc.ID]*cocoaTray
 	loop, source, pool uintptr
 	mu                 sync.Mutex
 	actions            []func()
@@ -309,6 +310,7 @@ func (b *cocoaBackend) Open(o Options, events func(Event)) (Window, error) {
 	tracking := mac.initTracking(macSend(macClass("NSTrackingArea"), "alloc"), macSel("initWithRect:options:owner:userInfo:"), NSRect{}, 2|0x20|0x200, view, 0)
 	macSend(view, "addTrackingArea:", uintptr(tracking))
 	macSend(tracking, "release")
+	w.setIcons(o)
 	macSend(win, "center")
 	macSend(win, "makeFirstResponder:", uintptr(view))
 	macSend(win, "makeKeyAndOrderFront:", 0)
@@ -321,6 +323,9 @@ func (b *cocoaBackend) Run() error {
 		b.running = true
 		macSend(b.app, "run")
 		b.running = false
+	}
+	for _, tray := range b.trays {
+		tray.Close()
 	}
 	b.mu.Lock()
 	b.closed = true
@@ -643,10 +648,23 @@ func macViewMethods() []objc.MethodDef {
 }
 func macDelegateMethods() []objc.MethodDef {
 	return []objc.MethodDef{
+		{Cmd: macSel("fegoTrayAction:"), Fn: func(self objc.ID, _ objc.SEL, sender objc.ID) {
+			if b := macActive; b != nil {
+				if tray := b.trays[self]; tray != nil {
+					tray.click(int32(macSend(sender, "tag")))
+				}
+			}
+		}},
+		{Cmd: macSel("fegoTrayActivate:"), Fn: func(self objc.ID, _ objc.SEL, _ objc.ID) {
+			if b := macActive; b != nil {
+				if tray := b.trays[self]; tray != nil {
+					tray.click(0)
+				}
+			}
+		}},
 		{Cmd: macSel("windowShouldClose:"), Fn: func(self objc.ID, _ objc.SEL, _ objc.ID) bool {
 			if w := macDelegate(self); w != nil {
 				w.events(Event{Kind: Close})
-				w.Close()
 			}
 			return false
 		}},
@@ -672,10 +690,6 @@ func macDelegateMethods() []objc.MethodDef {
 		}},
 		{Cmd: macSel("quit:"), Fn: func(objc.ID, objc.SEL, objc.ID) {
 			if b := macActive; b != nil {
-				for _, w := range b.windows {
-					w.events(Event{Kind: Close})
-					w.Close()
-				}
 				b.Quit()
 			}
 		}},
