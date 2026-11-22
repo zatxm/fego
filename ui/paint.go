@@ -8,7 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	fonttext "github.com/zatxm/fego/internal/text"
+	fonttext "github.com/zatxm/fego/v26/internal/text"
 )
 
 // Painter draws in logical pixels, clipped to its widget and the changed region.
@@ -313,7 +313,7 @@ func (p *Painter) Image(img image.Image, r Rect) {
 func (p *Painter) Shadow(r Rect, radius float32) {
 	for i := 5; i >= 1; i-- {
 		d := float32(i)
-		p.RoundRect(Rect{r.X - d, r.Y - d + 2, r.W + d*2, r.H + d*2}, radius+d, RGBA(22, 40, 76, 3))
+		p.RoundRect(Rect{r.X - d, r.Y - d + 2, r.W + d*2, r.H + d*2}, radius+d, RGBA(0, 0, 0, 3))
 	}
 }
 
@@ -330,63 +330,73 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	p.clip = p.clip.Intersect(e.clip.pixels(v.scale))
 	defer func() { p.clip = oldClip }()
 	disabled = disabled || e.disabled
-	t := v.theme
+	t := &v.theme
+	primary := t.Accent
 	r := e.rect
 	s := &e.style
 	font := v.font(e)
-	fg := t.Text
+	fg, bg := t.Text, Color{}
+	switch s.tone {
+	case mutedText:
+		fg = t.Muted
+	case dangerText:
+		fg = t.Danger
+	case primaryText:
+		fg = t.AccentText
+	case sidebarSurface:
+		bg = t.Sidebar
+	case mutedSurface:
+		bg = t.Raised
+	case primarySurface:
+		bg = primary
+	}
 	if s.fgSet {
 		fg = s.fg
 	}
 	if disabled {
 		fg = mix(fg, t.Surface, .55)
-		t.Accent = mix(t.Accent, t.Surface, .55)
+		primary = mix(primary, t.Surface, .55)
 	}
-	bg := s.bg
-	if !s.bgSet {
-		if s.shadow {
-			bg = t.Surface
-		} else {
-			bg = Color{}
-		}
+	if s.bgSet {
+		bg = s.bg
+	} else if s.card && s.tone != sidebarSurface {
+		bg = t.Surface
 	}
 	border := t.Border
+	if e.kind == kInput || e.kind == kEditor || e.kind == kSelect ||
+		(e.kind == kButton && !e.primary && !e.tab) || e.kind == kCheck || e.kind == kRadio || e.kind == kSwitch {
+		border = t.InputBorder
+	}
 	if s.borderSet && s.border.A != 0 {
 		border = s.border
 	}
 	if !disabled && v.hover == e {
-		border = mix(border, t.Accent, .45)
+		border = mix(border, t.Ring, .45)
 	}
 	if v.focused == e {
-		border = t.Accent
+		border = t.Ring
 	}
-	if s.shadow {
-		saved := p.clip
-		clips := []image.Rectangle{oldClip}
-		inset := max(0, s.radius) + 2
-		if bg.A == 255 && r.W > 2*inset && r.H > 2*inset {
-			// The opaque background overwrites this interior after the shadow.
-			cut := image.Rect(int(math.Ceil(float64((r.X+inset)*p.scale))), int(math.Ceil(float64((r.Y+inset)*p.scale))), int(math.Floor(float64((r.X+r.W-inset)*p.scale))), int(math.Floor(float64((r.Y+r.H-inset)*p.scale)))).Intersect(oldClip)
-			if !cut.Empty() {
-				clips = []image.Rectangle{image.Rect(oldClip.Min.X, oldClip.Min.Y, oldClip.Max.X, cut.Min.Y), image.Rect(oldClip.Min.X, cut.Max.Y, oldClip.Max.X, oldClip.Max.Y), image.Rect(oldClip.Min.X, cut.Min.Y, cut.Min.X, cut.Max.Y), image.Rect(cut.Max.X, cut.Min.Y, oldClip.Max.X, cut.Max.Y)}
-			}
-		}
-		for _, clip := range clips {
-			if !clip.Empty() {
-				p.clip = clip
-				p.Shadow(r, s.radius)
-			}
-		}
-		p.clip = saved
+	if s.card {
+		clipped := p.clip
+		p.clip = oldClip.Intersect(Rect{r.X - 3, r.Y + r.H - 1, r.W + 6, 7}.pixels(v.scale))
+		p.RoundRect(Rect{r.X - 2, r.Y + 2, r.W + 4, r.H + 4}, s.radius+2, RGBA(0, 0, 0, 10))
+		p.clip = clipped
 	}
 	if p.clip.Empty() {
 		return
 	}
 	// A transparent border color removes the border instead of filling the
 	// element with the theme border under a translucent background.
-	if s.borderSet && s.border.A != 0 {
-		p.RoundRect(r, s.radius, border)
-		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, max(0, s.radius-1), bg)
+	if s.card && !s.borderSet || s.borderSet && s.border.A != 0 {
+		inner := Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}
+		// A damaged area inside the opaque center cannot contain border pixels.
+		// Skip painting the border underneath pixels the surface replaces.
+		if s.card && bg.A == 255 && p.clip.In(inner.pixels(p.scale).Inset(int(math.Ceil(float64((s.radius+1)*p.scale))))) {
+			p.fillPixels(p.clip, bg)
+		} else {
+			p.RoundRect(r, s.radius, border)
+			p.RoundRect(inner, max(0, s.radius-1), bg)
+		}
 	} else if bg.A != 0 {
 		p.RoundRect(r, s.radius, bg)
 	}
@@ -399,7 +409,23 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		p.Label(text, x, box.Y+(box.H-th)/2, font, color, bold)
 	}
 	switch e.kind {
-	case kBox:
+	case kVirtualList:
+		p.Rect(r, t.Surface)
+		for _, c := range e.children {
+			v.paint(p, c, disabled)
+		}
+		if e.maxScroll() > 0 {
+			_, thumb := scrollbar(e)
+			p.RoundRect(Rect{thumb.X + 5, thumb.Y, 3, thumb.H}, 2, t.Border)
+		}
+	case kBox, kVirtualRow:
+		if e.kind == kVirtualRow {
+			l := e.parent.virtual
+			_, selected := l.chosen[l.key(e.selected)]
+			if selected || v.hover == e || l.header(e.selected) {
+				p.Rect(r, t.Raised)
+			}
+		}
 		for _, c := range e.children {
 			v.paint(p, c, disabled)
 		}
@@ -427,12 +453,12 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	case kButton:
 		b, c := t.Surface, fg
 		if e.primary {
-			b, c = t.Accent, t.AccentText
+			b, c = primary, t.AccentText
 		}
 		if e.tab {
 			b = Color{}
 			if e.primary {
-				b, c = mix(t.Surface, t.Accent, .12), t.Accent
+				b, c = t.Raised, t.Text
 			}
 		}
 		if s.bgSet {
@@ -442,17 +468,17 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			b, c = t.Raised, fg
 		} else if v.pressed == e {
 			if e.tab {
-				b = mix(t.Surface, t.Accent, .18)
+				b = t.Raised
 			} else {
-				b = mix(b, t.Text, .14)
+				b = mix(b, t.AccentText, .22)
 			}
 		} else if v.hover == e {
 			if e.tab {
-				b = mix(t.Surface, t.Accent, .08)
+				b = t.Raised
 			} else if e.primary {
-				b = mix(b, t.Text, .06)
+				b = mix(t.Surface, primary, .9)
 			} else {
-				b = mix(b, t.Accent, .08)
+				b = t.Raised
 			}
 		}
 		outlined := !e.primary && !e.tab
@@ -467,11 +493,31 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		if b.A != 0 {
 			p.RoundRect(r, max(0, radius), b)
 		}
-		label(e.text, r, c, true, true)
+		label(e.text, r, c, s.bold, true)
 	case kInput, kEditor:
+		if e.otpLength > 0 {
+			for i := range e.otpLength {
+				slot := e.otpSlot(i)
+				p.RoundRect(slot, 6, border)
+				p.RoundRect(Rect{slot.X + 1, slot.Y + 1, slot.W - 2, slot.H - 2}, 5, t.Surface)
+				if v.focused == e && i == min(e.cursor, e.otpLength-1) {
+					p.RoundRect(slot, 6, t.Ring)
+					p.RoundRect(Rect{slot.X + 2, slot.Y + 2, slot.W - 4, slot.H - 4}, 4, t.Surface)
+				}
+				if i >= min(e.anchor, e.cursor) && i < max(e.anchor, e.cursor) {
+					p.RoundRect(Rect{slot.X + 3, slot.Y + 3, slot.W - 6, slot.H - 6}, 4, t.Raised)
+				}
+				if i < len(e.text) {
+					label(e.text[i:i+1], slot, fg, true, true)
+				} else {
+					label("·", slot, t.Muted, false, true)
+				}
+			}
+			break
+		}
 		bc := border
 		if v.focused == e {
-			bc = t.Accent
+			bc = t.Ring
 		}
 		p.RoundRect(r, s.radius, bc)
 		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, max(0, s.radius-1), t.Surface)
@@ -518,9 +564,9 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		cx, cy := r.X+10, r.Y+r.H/2
 		textX := r.X + 30
 		if e.kind == kSwitch {
-			b := t.Border
+			b := border
 			if e.checked {
-				b = t.Accent
+				b = primary
 			}
 			p.RoundRect(Rect{r.X, cy - 11, 40, 22}, 11, b)
 			if !e.checked {
@@ -530,21 +576,21 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			if e.checked {
 				knob = r.X + 29
 			}
-			p.Circle(knob, cy, 8, RGB(255, 255, 255))
+			p.Circle(knob, cy, 8, t.AccentText)
 			textX = r.X + 52
 		} else if e.kind == kRadio {
 			if e.checked {
-				border = t.Accent
+				border = primary
 			}
 			p.Circle(cx, cy, 9, border)
 			p.Circle(cx, cy, 7, t.Surface)
 			if e.checked {
-				p.Circle(cx, cy, 4, t.Accent)
+				p.Circle(cx, cy, 4, primary)
 			}
 		} else {
 			b := border
 			if e.checked {
-				b = t.Accent
+				b = primary
 			}
 			p.RoundRect(Rect{r.X, cy - 9, 18, 18}, 5, b)
 			if e.checked {
@@ -558,18 +604,25 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	case kSlider:
 		cy := r.Y + r.H/2
 		track := Rect{r.X + 8, cy - 3, r.W - 16, 6}
-		fraction := float32((e.value - e.minimum) / (e.maximum - e.minimum))
-		if math.IsInf(e.maximum-e.minimum, 0) {
-			fraction = float32((e.value/2 - e.minimum/2) / (e.maximum/2 - e.minimum/2))
+		fraction := sliderFraction(e, e.value)
+		start, end := float32(0), fraction
+		if interval := e.interval; interval != nil {
+			start, end = fraction, sliderFraction(e, interval.high)
 		}
 		p.RoundRect(track, 3, t.Raised)
-		p.RoundRect(Rect{track.X, track.Y, track.W * fraction, track.H}, 3, t.Accent)
-		x := track.X + track.W*fraction
-		p.Circle(x, cy, 8, t.Accent)
-		p.Circle(x, cy, 5.5, RGB(255, 255, 255))
+		p.RoundRect(Rect{track.X + start*track.W, track.Y, track.W * (end - start), track.H}, 3, primary)
+		thumb := func(at float32) {
+			x := track.X + track.W*at
+			p.Circle(x, cy, 8, primary)
+			p.Circle(x, cy, 6, t.Surface)
+		}
+		thumb(fraction)
+		if e.interval != nil {
+			thumb(end)
+		}
 	case kProgress:
 		p.RoundRect(r, r.H/2, t.Raised)
-		p.RoundRect(Rect{r.X, r.Y, r.W * float32(e.value), r.H}, r.H/2, t.Accent)
+		p.RoundRect(Rect{r.X, r.Y, r.W * float32(e.value), r.H}, r.H/2, primary)
 	case kSelect:
 		p.RoundRect(r, s.radius, border)
 		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, s.radius-1, t.Surface)
@@ -608,7 +661,11 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 func (v *view) paintFocus(p *Painter, e *Element) {
 	if v.focused == e {
 		t := v.theme
-		p.RoundRect(Rect{e.rect.X - 3, e.rect.Y - 3, e.rect.W + 6, e.rect.H + 6}, e.style.radius+3, RGBA(t.Accent.R, t.Accent.G, t.Accent.B, 32))
+		r := e.rect
+		if e.otpLength > 0 {
+			r.W = e.otpSlot(e.otpLength-1).X - r.X + e.otpSlot(0).W
+		}
+		p.RoundRect(Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}, e.style.radius+3, RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128))
 	}
 }
 
@@ -619,9 +676,17 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 	header, rowH := e.headerHeight(), e.rowHeight()
 	y0 := r.Y + header
 	p.clip = p.clip.Intersect(Rect{r.X, y0, r.W, r.H - header}.pixels(v.scale))
-	first := max(0, int(e.scroll/rowH))
-	last := min(e.rowCount(), int((e.scroll+r.H-header)/rowH)+1)
-	_, th := v.text.Measure("Ag", font, false)
+	first := max(0, int((e.scroll+float32(p.clip.Min.Y)/p.scale-y0)/rowH)-1)
+	last := min(e.rowCount(), int((e.scroll+float32(p.clip.Max.Y)/p.scale-y0)/rowH)+2)
+	var th, flex float32
+	if !p.clip.Empty() && first < last {
+		_, th = v.text.Measure("Ag", font, false)
+	} else {
+		last = first
+	}
+	if e.kind == kTable {
+		flex = flexibleColumnWidth(e)
+	}
 	for i := first; i < last; i++ {
 		bodyClip := p.clip
 		y := y0 + float32(i)*rowH - e.scroll
@@ -632,9 +697,8 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 			continue
 		}
 		if e.selected == i {
-			p.Rect(rr, mix(t.Surface, t.Accent, .12))
-			p.Rect(Rect{r.X, y, 3, rowH}, t.Accent)
-		} else if i%2 != 0 && e.kind == kTable {
+			p.Rect(rr, t.Raised)
+		} else if i%2 != 0 && e.kind == kTable && t.Surface != t.Background {
 			p.Rect(rr, mix(t.Surface, t.Background, .4))
 		}
 		ty := y + (rowH-th)/2
@@ -661,7 +725,10 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 			}
 			x := r.X
 			for col, c := range e.columns {
-				width := v.columnWidth(e, col)
+				width := c.Width
+				if width <= 0 {
+					width = flex
+				}
 				if col < len(e.rows[index]) {
 					saved := p.clip
 					p.clip = p.clip.Intersect(Rect{x, y, width, rowH}.pixels(v.scale))
@@ -669,20 +736,24 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 					p.clip = saved
 				}
 				x += width
-				_ = c
 			}
 		}
 		p.clip = bodyClip
 	}
 	p.clip = originalClip
-	if e.kind == kTable {
-		p.clip = p.clip.Intersect(Rect{r.X, r.Y, r.W, header}.pixels(v.scale))
+	headerClip := p.clip.Intersect(Rect{r.X, r.Y, r.W, header}.pixels(v.scale))
+	if e.kind == kTable && !headerClip.Empty() {
+		p.clip = headerClip
 		p.RoundRect(Rect{r.X, r.Y, r.W, header + e.style.radius}, e.style.radius, t.Raised)
 		p.Rect(Rect{r.X, r.Y + header - 1, r.W, 1}, t.Border)
 		x := r.X
-		for i, c := range e.columns {
+		for _, c := range e.columns {
 			p.Label(c.Title, x+14, r.Y+12, font-1, t.Muted, true)
-			x += v.columnWidth(e, i)
+			width := c.Width
+			if width <= 0 {
+				width = flex
+			}
+			x += width
 		}
 		p.clip = originalClip
 	}
@@ -697,6 +768,9 @@ func (v *view) columnWidth(e *Element, i int) float32 {
 	if e.columns[i].Width > 0 {
 		return e.columns[i].Width
 	}
+	return flexibleColumnWidth(e)
+}
+func flexibleColumnWidth(e *Element) float32 {
 	fixed := float32(0)
 	flex := 0
 	for _, c := range e.columns {

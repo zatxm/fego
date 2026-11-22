@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zatxm/fego"
-	fonttext "github.com/zatxm/fego/internal/text"
+	"github.com/zatxm/fego/v26"
+	fonttext "github.com/zatxm/fego/v26/internal/text"
 )
 
 type Document struct {
@@ -20,9 +20,23 @@ func View(root *Element) *Document {
 	if root == nil || root.parent != nil || root.view != nil {
 		panic("ui: View needs a root element")
 	}
-	return &Document{root: root, theme: Light}
+	return (&Document{root: root}).Theme(Light)
 }
 func (d *Document) Theme(theme Theme) *Document {
+	if theme.InputBorder == (Color{}) {
+		theme.InputBorder = theme.Border
+	}
+	if theme.Ring == (Color{}) {
+		theme.Ring = theme.Accent
+	}
+	if theme.Sidebar == (Color{}) {
+		theme.Sidebar = theme.Surface
+	}
+	if theme.Chart == ([5]Color{}) {
+		theme.Chart = Light.Chart
+		theme.Chart[0] = theme.Accent
+	}
+
 	d.theme = theme
 	if d.live != nil {
 		d.live.theme = theme
@@ -83,6 +97,7 @@ type view struct {
 	pointerX, pointerY      float32
 	popup                   *popup
 	dialog                  *Element
+	drawer                  bool
 	returnFocus             *Element
 	toast                   string
 	tip                     tooltip
@@ -92,6 +107,8 @@ type view struct {
 	rowLabels               map[[2]uint64]string
 	scrolling               *pixelScroll
 	scrollState             pixelScroll
+	scrollCheck             *Element
+	scrollCopyOK            bool
 }
 
 func (v *view) Close() {
@@ -114,6 +131,7 @@ func (v *view) Close() {
 func (v *view) invalidate(e *Element, layout bool) {
 	v.scrolling = nil
 	if layout {
+		v.scrollCheck = nil
 		v.needsLayout = true
 	} else if !v.size.Empty() {
 		v.damage(e.rect.pixels(v.scale).Inset(-e.paintPadding(v.scale)))
@@ -165,9 +183,13 @@ func (v *view) frame(force bool) {
 		v.layout(v.root, r, r)
 		if v.dialog != nil {
 			dw, dh := v.measure(v.dialog)
-			dw = min(dw, r.W-32)
-			dh = min(dh, r.H-32)
-			v.layout(v.dialog, Rect{(r.W - dw) / 2, (r.H - dh) / 2, dw, dh}, r)
+			dw = min(dw, max(0, r.W-32))
+			dh = min(dh, max(0, r.H-32))
+			bounds := Rect{(r.W - dw) / 2, (r.H - dh) / 2, dw, dh}
+			if v.drawer {
+				bounds = Rect{r.W - dw, 0, dw, r.H}
+			}
+			v.layout(v.dialog, bounds, r)
 		}
 		v.dirty = append(v.dirty[:0], v.size)
 		v.needsLayout = false
@@ -292,7 +314,7 @@ func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
 	p.fillPixels(d, v.theme.Background)
 	v.paint(p, v.root, false)
 	if v.dialog != nil {
-		p.fillPixels(v.size, RGBA(8, 16, 32, 96))
+		p.fillPixels(v.size, RGBA(0, 0, 0, 128))
 		v.paint(p, v.dialog, false)
 	}
 	if v.popup != nil {
@@ -316,7 +338,9 @@ func (d *Document) Stats() Stats {
 	}
 	return Stats{d.live.frames, d.live.paints}
 }
-func (d *Document) ShowDialog(content *Element) {
+func (d *Document) ShowDialog(content *Element) { d.showDialog(content, false) }
+
+func (d *Document) showDialog(content *Element, drawer bool) {
 	v := d.live
 	if v == nil {
 		return
@@ -333,6 +357,7 @@ func (d *Document) ShowDialog(content *Element) {
 	}
 	v.forget(v.root)
 	v.dialog = content
+	v.drawer = drawer
 	content.attach(v)
 	v.focused = nil
 	v.invalidate(v.root, true)

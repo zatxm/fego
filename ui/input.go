@@ -7,7 +7,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 type popup struct {
@@ -53,8 +53,10 @@ func (v *view) forget(subtree *Element) {
 
 func (e *Element) interactive() bool {
 	switch e.kind {
-	case kButton, kInput, kEditor, kCheck, kRadio, kSwitch, kSlider, kSelect, kList, kTable, kTree:
+	case kButton, kInput, kEditor, kCheck, kRadio, kSwitch, kSlider, kSelect, kList, kTable, kTree, kVirtualList:
 		return true
+	case kVirtualRow:
+		return e.parent != nil && !e.parent.virtual.header(e.selected)
 	}
 	return e.onClick != nil || e.onLink != nil
 }
@@ -81,7 +83,7 @@ func scrollHit(e *Element, x, y float32) *Element {
 			return child
 		}
 	}
-	if e.scrollable || e.kind == kList || e.kind == kTable || e.kind == kTree || e.multiline {
+	if e.scrollable || e.kind == kList || e.kind == kTable || e.kind == kTree || e.kind == kVirtualList || e.multiline {
 		return e
 	}
 	return nil
@@ -162,7 +164,12 @@ func (v *view) input(ev fego.Event) {
 		}
 		e := hit(root, x, y)
 		v.pressed = e
-		v.focus(e)
+		if e != nil && e.kind == kVirtualRow {
+			e.parent.virtual.dragY = y
+			v.focus(e.parent)
+		} else {
+			v.focus(e)
+		}
 		if e != nil {
 			if e.kind == kInput || e.kind == kEditor {
 				e.own().cursor = v.textPosition(e, x, y)
@@ -171,8 +178,18 @@ func (v *view) input(ev fego.Event) {
 				}
 			}
 			if e.kind == kSlider {
+				if r := e.interval; r != nil {
+					p := (x - e.rect.X - 8) / max(1, e.rect.W-16)
+					r.activeHigh = p > (sliderFraction(e, r.value)+sliderFraction(e, r.high))/2
+				}
 				v.slide(e, x)
 			}
+			v.invalidate(e, false)
+		}
+	case fego.PointerCancel:
+		v.scrollDrag = nil
+		if e := v.pressed; e != nil {
+			v.pressed = nil
 			v.invalidate(e, false)
 		}
 	case fego.PointerUp:
@@ -187,6 +204,21 @@ func (v *view) input(ev fego.Event) {
 		v.pressed = nil
 		if e != nil {
 			v.invalidate(e, false)
+			if e.kind == kVirtualRow && e.parent != nil {
+				l := e.parent.virtual
+				if l.options.Reorder != nil && l.clip.contains(x, y) &&
+					(y-l.dragY > 5 || l.dragY-y > 5) {
+					pos := l.scroll + y - l.rect.Y
+					before := l.index(pos)
+					if before < l.options.Count && float64(pos) > (l.top(before)+l.top(before+1))/2 {
+						before++
+					}
+					l.drop(e.selected, before)
+				} else if e == hit(root, x, y) {
+					l.click(e.selected, ev)
+				}
+				break
+			}
 			if e == hit(root, x, y) {
 				v.activate(e, x, y)
 			}
@@ -194,9 +226,11 @@ func (v *view) input(ev fego.Event) {
 	case fego.Scroll:
 		e := scrollHit(root, x, y)
 		for e != nil {
-			if e.scrollable || e.kind == kList || e.kind == kTable || e.kind == kTree || e.multiline {
-				v.scrollRows(e, max(0, min(e.maxScroll(), e.scroll+ev.DY/scale)))
-				break
+			if e.scrollable || e.kind == kList || e.kind == kTable || e.kind == kTree || e.kind == kVirtualList || e.multiline {
+				if next := max(0, min(e.maxScroll(), e.scroll+ev.DY/scale)); next != e.scroll {
+					v.scrollRows(e, next)
+					break
+				}
 			}
 			e = e.parent
 		}
@@ -222,6 +256,16 @@ func (v *view) input(ev fego.Event) {
 			v.editKey(e, ev)
 			return
 		}
+		if e.kind == kSlider && e.interval != nil && e.interval.key(ev) {
+			return
+		}
+		if e.kind == kVirtualList || e.kind == kVirtualRow {
+			if e.kind == kVirtualRow {
+				e = e.parent
+			}
+			e.virtual.keyDown(ev)
+			return
+		}
 		switch ev.Key {
 		case "Enter", "Space":
 			y := e.rect.Y + e.rect.H/2
@@ -235,9 +279,18 @@ func (v *view) input(ev fego.Event) {
 		case "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End":
 			v.navigate(e, ev.Key)
 		}
-	case fego.Text:
+	case fego.Text, fego.TextEdit, fego.TextSelection:
 		e := v.focused
 		if e != nil && v.available(e) && (e.kind == kInput || e.kind == kEditor) && len(ev.Text) <= 4<<20 {
+			if ev.Kind != fego.Text {
+				n := utf8.RuneCountInString(e.text)
+				e.own().anchor = min(n, max(0, ev.Start))
+				e.own().cursor = min(n, max(0, ev.End))
+				if ev.Kind == fego.TextSelection {
+					v.invalidate(e, false)
+					return
+				}
+			}
 			s := ev.Text
 			if !e.multiline {
 				s = strings.ReplaceAll(strings.ReplaceAll(s, "\r", ""), "\n", "")
@@ -248,7 +301,7 @@ func (v *view) input(ev fego.Event) {
 }
 
 func scrollbar(e *Element) (track, thumb Rect) {
-	if !e.scrollable && e.rowCount() == 0 {
+	if !e.scrollable && e.kind != kVirtualList && e.rowCount() == 0 {
 		return
 	}
 	header := e.headerHeight()
@@ -319,7 +372,7 @@ func (v *view) focusNext(back bool) {
 	var list []*Element
 	var walk func(*Element)
 	walk = func(e *Element) {
-		if e.hidden || e.disabled {
+		if e.hidden || e.disabled || (e.kind == kVirtualRow && (e.clip.W <= 0 || e.clip.H <= 0)) {
 			return
 		}
 		if e.interactive() {
@@ -493,7 +546,12 @@ func (v *view) navigate(e *Element, key string) {
 func (v *view) slide(e *Element, x float32) {
 	f := max(0, min(1, (x-e.rect.X-8)/max(1, e.rect.W-16)))
 	old := e.value
-	e.SetValue(e.minimum*(1-float64(f)) + e.maximum*float64(f))
+	value := e.minimum*(1-float64(f)) + e.maximum*float64(f)
+	if r := e.interval; r != nil {
+		r.move(value, r.activeHigh)
+		return
+	}
+	e.SetValue(value)
 	if old != e.value && e.onValue != nil {
 		e.onValue(e.value)
 	}
@@ -544,6 +602,9 @@ func (v *view) inputInner(e *Element) Rect {
 	return inner
 }
 func (v *view) textPosition(e *Element, x, y float32) int {
+	if e.otpLength > 0 {
+		return min(len(e.text), max(0, int((x-e.rect.X)/max(1, e.otpSlot(0).W+3))))
+	}
 	inner := v.inputInner(e)
 	font := v.font(e)
 	row := max(0, int((y-inner.Y+e.scroll)/v.text.LineHeight(font, false)))
@@ -579,6 +640,10 @@ func runeByteOffset(s string, n int) int {
 }
 
 func (v *view) caretPosition(e *Element, inner Rect) (float32, float32) {
+	if e.otpLength > 0 {
+		slot := e.otpSlot(min(e.cursor, e.otpLength-1))
+		return slot.X + slot.W/2, inner.Y
+	}
 	prefix := e.text[:runeByteOffset(e.text, e.cursor)]
 	row := strings.Count(prefix, "\n")
 	prefix = prefix[strings.LastIndexByte(prefix, '\n')+1:]
@@ -605,6 +670,11 @@ func (v *view) updateCaret() {
 	x, y = v.caretPosition(e, inner)
 	r := Rect{x, y, 2, v.text.LineHeight(v.font(e), false)}
 	v.host.TextInput(true, r.pixels(v.scale))
+	if h, ok := v.host.(interface {
+		SetTextInputState(string, int, int, bool, bool)
+	}); ok {
+		h.SetTextInputState(e.text, e.anchor, e.cursor, e.password, e.otpLength > 0)
+	}
 }
 func (v *view) replaceSelection(e *Element, text string) {
 	if text == "" && e.cursor == e.anchor {
@@ -617,6 +687,13 @@ func (v *view) replaceSelection(e *Element, text string) {
 	// Text input is bounded at its external clipboard/IME boundary.
 	if utf8.RuneCountInString(e.text)-(b-a)+utf8.RuneCountInString(text) > 1<<20 {
 		return
+	}
+	if e.otpLength > 0 {
+		original := text
+		text = otpDigits(text, e.otpLength-(len(e.text)-(b-a)))
+		if text == "" && original != "" {
+			return
+		}
 	}
 	rs := []rune(e.text)
 	insert := []rune(text)
@@ -713,6 +790,8 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 	case "Enter":
 		if e.multiline {
 			v.replaceSelection(e, "\n")
+		} else if e.submit != nil {
+			e.submit()
 		} else if e.onClick != nil {
 			e.onClick()
 		}
@@ -862,7 +941,7 @@ func (v *view) paintPopup(p *Painter) {
 			break
 		}
 		if i == menu.selected {
-			p.RoundRect(Rect{r.X + 5, y, r.W - 10, 32}, 6, mix(t.Surface, t.Accent, .12))
+			p.RoundRect(Rect{r.X + 5, y, r.W - 10, 32}, 6, t.Raised)
 		}
 		p.Label(menu.options[i], r.X+14, y+8, v.theme.FontSize, t.Text, false)
 	}

@@ -92,7 +92,7 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 func (c *Chart) paintChart(p *Painter) {
 	w, h := c.rect.W, c.rect.H
 	p.RoundRect(Rect{W: w, H: h}, 12, p.theme.Surface)
-	colors := [...]Color{p.theme.Accent, RGB(21, 153, 139), RGB(225, 145, 51), RGB(180, 100, 207)}
+	colors := p.theme.Chart
 	legendX, legendY := float32(16), float32(12)
 	for i, series := range c.series {
 		if series.Name == "" {

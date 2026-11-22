@@ -13,7 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 func lineReference(p *Painter, x1, y1, x2, y2, width float32, c Color) {

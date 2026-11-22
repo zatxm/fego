@@ -3,7 +3,7 @@ package ui
 import (
 	"image"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 // Tester drives the same layout, paint and input code as a native window.

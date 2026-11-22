@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/zatxm/fego/internal/platform"
+	"github.com/zatxm/fego/v26/internal/platform"
 )
 
 type testBackend struct {

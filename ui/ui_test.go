@@ -5,7 +5,7 @@ import (
 	"image"
 	"testing"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 func clickElement(t *Tester, e *Element) { r := e.Bounds(); t.Click(r.X+r.W/2, r.Y+r.H/2) }

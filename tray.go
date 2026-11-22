@@ -5,7 +5,7 @@ import (
 	"image"
 	"math"
 
-	"github.com/zatxm/fego/internal/platform"
+	"github.com/zatxm/fego/v26/internal/platform"
 )
 
 // Menu is a reusable snapshot of menu items. Commit changes with Tray.SetMenu.

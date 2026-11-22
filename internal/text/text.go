@@ -757,6 +757,19 @@ func fontCandidates(kind string, bold bool) []candidate {
 		case "symbols":
 			return []candidate{{filepath.Join(root, "seguisym.ttf"), 0}}
 		}
+	case "android":
+		switch kind {
+		case "latin":
+			return []candidate{{"/system/fonts/Roboto-Regular.ttf", 0}, {"/system/fonts/RobotoStatic-Regular.ttf", 0}}
+		case "cjk":
+			return []candidate{{"/system/fonts/NotoSansCJK-Regular.ttc", 2}}
+		case "symbols":
+			return []candidate{{"/system/fonts/NotoSansSymbols-Regular.ttf", 0}}
+		}
+	case "ios":
+		if kind == "cjk" {
+			return []candidate{{"/System/Library/Fonts/LanguageSupport/PingFang.ttc", 0}}
+		}
 	case "darwin":
 		switch kind {
 		case "latin":

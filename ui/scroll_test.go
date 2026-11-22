@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 type scrollScreen struct {

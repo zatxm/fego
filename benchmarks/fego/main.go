@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/zatxm/fego"
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 func setting(name string, fallback int) int {

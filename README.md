@@ -2,9 +2,9 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A lightweight, pure-Go native desktop UI toolkit for Linux, Windows, and macOS — no CGO or WebView required.
+A lightweight Go toolkit for native desktop and mobile UI. Linux, Windows, and macOS desktop builds use pure Go. Android and iOS use their native SDKs.
 
-fego provides windows, layouts, forms, data views, text editing, and light and dark themes. Create widgets and update their state through Go APIs to build native desktop applications.
+Build layouts, forms, data views, and text editors with retained Go controls and light and dark themes using the [shadcn Neutral color tokens](https://ui.shadcn.com/docs/theming#default-theme-css).
 
 [Example](examples/gallery/main.go) · [Performance data](benchmarks/README.md) · [Changelog](CHANGELOG.md) · [CI](https://github.com/zatxm/fego/actions/workflows/ci.yml)
 
@@ -19,16 +19,18 @@ fego provides windows, layouts, forms, data views, text editing, and light and d
 | Linux | X11; XWayland on Wayland desktops | amd64, arm64 |
 | Windows | Win32 | amd64, arm64 |
 | macOS | Cocoa | amd64, arm64 |
+| Android | Native activity | arm64, amd64 |
+| iOS | UIKit | arm64 |
 
 Linux requires X11 or XWayland at runtime; when `libXext` and a local server provide MIT-SHM, window updates use shared memory and otherwise fall back to regular uploads. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
 
 ## Quick start
 
-Install Go; see [go.mod](go.mod) for toolchain requirements. In an empty directory, create a project and add the dependency:
+Install Go 1.27.4 or newer. In an empty directory, create a project and add the dependency:
 
 ```sh
 go mod init example.com/hello-fego
-go get github.com/zatxm/fego
+go get github.com/zatxm/fego/v26
 ```
 
 Create `main.go`:
@@ -40,8 +42,8 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/zatxm/fego"
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 func main() {
@@ -66,6 +68,8 @@ Run the application or build an executable:
 go run .
 go build .
 ```
+
+For Android and iOS build instructions, see [Mobile](docs/mobile.md).
 
 ## Run the gallery
 
@@ -100,9 +104,9 @@ Create trays and update their menus on the UI thread. From worker goroutines, us
 | --- | --- |
 | Layout | Box, Row, Column, Grid, Card, ScrollView, spacing, padding, sizing, and alignment |
 | Basic widgets | Text, RichText, Button, PrimaryButton, Checkbox, Radio, Switch, Separator, Image |
-| Forms | TextInput, TextArea, password fields, Field, Form, Select, ComboBox, NumberInput, Slider, Progress |
-| Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Menu, Dropdown, Dialog, Toast, Badge, Avatar |
-| Data | List, Table with column sorting, Tree with expand/collapse, LineChart, BarChart |
+| Forms | TextInput, TextArea, password fields, Field, Form, Select, ComboBox, Autocomplete, SearchField, MultiSelect, TokenField, InputGroup, InputOTP, NumberInput, Stepper, DecimalInput, TimeInput, ColorPicker, Slider, RangeSlider, Rating, Progress |
+| Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Sidebar, CommandPalette, Pagination, Menu, Dropdown, SplitButton, Dialog, Drawer, Toast, Badge, Avatar |
+| Data | List, VirtualList, Table with column sorting, Tree with expand/collapse, LineChart, BarChart |
 | Dates and documents | Calendar, DatePicker, CodeEditor with line numbers, common Markdown syntax |
 | Drawing | Canvas; Painter rectangles, rounded rectangles, circles, lines, text, and images; Theme, Bounds |
 | Input | Mouse, scrolling, Tab and arrow keys, Unicode, selection, clipboard, undo, system input method text commits |
@@ -119,6 +123,21 @@ Layout dimensions use logical pixels. `FillWidth` and `FillHeight` fill their re
 Composite widgets such as `Tabs`, `DatePicker`, `NumberInput`, `ComboBox`, and charts expose `.Element` for placement in layouts. Set dimensions with methods such as `.Element.Width(...)`, and keep the original object to update values through its dedicated methods. `Badge` and `Avatar` are static decorations; replace the node to change their content.
 
 Lists, tables, and trees draw only visible rows. Call `Refresh` after changing list contents, and `SetCount` when its row count changes. Use `SetRows` to update table data. These widgets reuse scroll regions where possible to reduce repainting. On Linux the X server retains window pixels, so fego paints only damaged regions through a bounded scratch band instead of keeping a full-window client image.
+
+## Lists with custom rows
+
+Use `ui.List` for fixed-height text rows and `ui.VirtualList` when a row needs its own layout or controls:
+
+```go
+list := ui.VirtualList(ui.VirtualListOptions{Count: len(items), Name: func(i int) string {
+    return items[i].Name
+}}, func(i int) *ui.Element {
+    return ui.Row(ui.Text(items[i].Name).Grow(1), ui.Button("Open", func() { open(items[i]) }))
+})
+list.Fill()
+```
+
+The list mounts visible rows and a small buffer around them. Keep durable state in your data model. Use `Key` for stable selection through reordering, `Headers` for pinned sections, and `Reorder` to apply a drag to your data. Shift extends selection and Ctrl or Command toggles rows in multi-select mode. Use `Refresh` to rebuild rows after editing their data.
 
 ## Text and accessibility
 

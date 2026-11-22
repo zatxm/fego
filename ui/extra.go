@@ -125,6 +125,7 @@ func DatePicker(date time.Time) *DateField {
 	toggle := Button("▦", func() { d.Calendar.Hidden(!d.Calendar.hidden) }).Width(40).Label("Choose date")
 	d.errorText = Text("Use a valid date: YYYY-MM-DD").FontSize(12).Hidden(true)
 	d.Children(Row(d.Input, toggle).Gap(6), d.errorText, d.Calendar.Element)
+	d.errorText.style.tone = dangerText
 	d.Input.OnChange(func(text string) {
 		date, err := time.ParseInLocation("2006-01-02", text, d.date.Location())
 		d.valid = err == nil
@@ -190,6 +191,7 @@ func NumberInput(value, minimum, maximum, step float64) *NumberField {
 	n.plus = Button("+", func() { n.increment(1) }).Width(36).Label("Increase number")
 	n.errorText = Text("Enter a number from " + formatNumber(minimum) + " to " + formatNumber(maximum)).FontSize(12).Hidden(true)
 	n.Children(Row(n.minus, n.Input, n.plus).Gap(6), n.errorText)
+	n.errorText.style.tone = dangerText
 	n.Input.OnChange(func(text string) {
 		value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
 		n.valid = err == nil && finite(value) && value >= n.minimum && value <= n.maximum
@@ -379,7 +381,11 @@ func (c *ComboBoxView) Label(label string) *ComboBoxView {
 }
 
 func Badge(text string) *Element {
-	return Box(Text(text).FontSize(12).Bold().TextColor(RGB(50, 77, 170))).Padding(4, 10).Radius(20).Background(RGB(232, 238, 255))
+	label := Text(text).FontSize(12).Bold()
+	label.style.tone = primaryText
+	badge := Box(label).Padding(4, 10).Radius(20)
+	badge.style.tone = primarySurface
+	return badge
 }
 
 // Avatar derives up to two Unicode initials and retains the full accessible name.
@@ -402,5 +408,7 @@ func Avatar(name string, size float32) *Element {
 			}
 		}
 	}
-	return Box(Text(strings.ToUpper(initials)).FontSize(size*.32).Bold().TextColor(RGB(50, 77, 170))).Center().Size(size, size).Radius(size / 2).Background(RGB(232, 238, 255)).Label(name)
+	avatar := Box(Text(strings.ToUpper(initials)).FontSize(size*.32).Bold()).Center().Size(size, size).Radius(size / 2).Label(name)
+	avatar.style.tone = mutedSurface
+	return avatar
 }

@@ -11,6 +11,14 @@ type pixelScroll struct {
 }
 
 func (v *view) scrollRows(e *Element, next float32) {
+	if e.kind == kVirtualList {
+		if e.scroll != next {
+			e.scroll = next
+			v.layout(e, e.rect, e.clip)
+			v.invalidate(e, false)
+		}
+		return
+	}
 	old := e.scroll
 	if old == next {
 		return
@@ -29,7 +37,11 @@ func (v *view) scrollRows(e *Element, next float32) {
 	v.invalidate(e, e.scrollable && !localLayout)
 	opaque := e.rowCount() > 0 && v.theme.Surface.A == 255
 	if localLayout {
-		opaque = exactShift && (e.style.bgSet && e.style.bg.A == 255 || e == v.root && v.theme.Background.A == 255) && scrollCopySafe(e)
+		if v.scrollCheck != e {
+			v.scrollCheck = e
+			v.scrollCopyOK = scrollCopySafe(e)
+		}
+		opaque = exactShift && (e.style.bgSet && e.style.bg.A == 255 || e == v.root && v.theme.Background.A == 255) && v.scrollCopyOK
 	}
 	if !clean || !opaque || v.dialog != nil || v.popup != nil || v.toast != "" || v.tip.shown {
 		return
@@ -63,7 +75,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 
 func scrollCopySafe(e *Element) bool {
 	// Custom canvas callbacks may depend on absolute layout coordinates.
-	if e.kind == kCanvas {
+	if e.kind == kCanvas || e.kind == kVirtualList {
 		return false
 	}
 	for _, child := range e.children {

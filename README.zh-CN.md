@@ -2,9 +2,9 @@
 
 [English](README.md) | **简体中文**
 
-轻量的纯 Go 原生桌面 UI 工具包，支持 Linux、Windows 和 macOS，无需 CGO 或 WebView。
+轻量的 Go 原生桌面和移动端 UI 工具包。Linux、Windows、macOS 桌面构建使用纯 Go，Android 和 iOS 使用各自的原生 SDK。
 
-fego 是用 Go 编写的桌面 UI 工具包，提供窗口、布局、表单、数据展示、文本编辑、浅色与深色主题。通过 Go API 创建控件并更新状态，即可构建原生桌面应用。
+通过 Go API 创建和更新控件，构建布局、表单、数据视图和文本编辑界面。默认浅色和深色主题使用 [shadcn Neutral 配色](https://ui.shadcn.com/docs/theming#default-theme-css)。
 
 [示例](examples/gallery/main.go) · [性能数据](benchmarks/README.md) · [变更记录](CHANGELOG.md) · [CI](https://github.com/zatxm/fego/actions/workflows/ci.yml)
 
@@ -19,16 +19,18 @@ fego 是用 Go 编写的桌面 UI 工具包，提供窗口、布局、表单、�
 | Linux | X11；Wayland 桌面通过 XWayland | amd64、arm64 |
 | Windows | Win32 | amd64、arm64 |
 | macOS | Cocoa | amd64、arm64 |
+| Android | 原生 Activity | arm64、amd64 |
+| iOS | UIKit | arm64 |
 
 Linux 运行时需要 X11 或 XWayland；本地服务器与 `libXext` 支持 MIT-SHM 时，窗口更新使用共享内存，否则回退为普通上传。中文显示需要系统中文字体，建议安装 Noto Sans CJK；Windows 和 macOS 使用系统字体。没有可用的系统拉丁字体时，会回退到内嵌 Go 字体。
 
 ## 快速开始
 
-安装 Go，工具链要求见 [go.mod](go.mod)。在空目录中创建项目并添加依赖：
+安装 Go 1.27.4 或更高版本。在空目录中创建项目并添加依赖：
 
 ```sh
 go mod init example.com/hello-fego
-go get github.com/zatxm/fego
+go get github.com/zatxm/fego/v26
 ```
 
 新建 `main.go`：
@@ -40,8 +42,8 @@ import (
 	"log"
 	"strconv"
 
-	"github.com/zatxm/fego"
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 func main() {
@@ -84,6 +86,8 @@ go run ./examples/gallery -dark
 go run ./examples/gallery -snapshot gallery.png
 ```
 
+构建 Android 或 iOS 应用请参阅[移动端指南](docs/mobile.md)。
+
 ## 系统托盘与多窗口
 
 在支持托盘的桌面会话运行 `go run ./examples/tray`。示例从托盘启动，可以通过菜单打开窗口。关闭窗口后应用仍在后台运行，从托盘选择 **Quit** 可退出。
@@ -100,9 +104,9 @@ go run ./examples/gallery -snapshot gallery.png
 | --- | --- |
 | 布局 | Box、Row、Column、Grid、Card、ScrollView、间距、padding、尺寸和对齐 |
 | 基础控件 | Text、RichText、Button、PrimaryButton、Checkbox、Radio、Switch、Separator、Image |
-| 表单 | TextInput、TextArea、密码、Field、Form、Select、ComboBox、NumberInput、Slider、Progress |
-| 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Menu、Dropdown、Dialog、Toast、Badge、Avatar |
-| 数据 | List、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart |
+| 表单 | TextInput、TextArea、密码、Field、Form、Select、ComboBox、Autocomplete、SearchField、MultiSelect、TokenField、InputGroup、InputOTP、NumberInput、Stepper、DecimalInput、TimeInput、ColorPicker、Slider、RangeSlider、Rating、Progress |
+| 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Sidebar、CommandPalette、Pagination、Menu、Dropdown、SplitButton、Dialog、Drawer、Toast、Badge、Avatar |
+| 数据 | List、VirtualList、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart |
 | 日期与文档 | Calendar、DatePicker、带行号的 CodeEditor、Markdown 常用语法 |
 | 绘图 | Canvas、Painter 的矩形、圆角、圆、线、文本、图片、Theme、Bounds |
 | 输入 | 鼠标、滚轮、Tab 与方向键、Unicode、选择、剪贴板、撤销、系统输入法提交文本 |
@@ -119,6 +123,21 @@ go run ./examples/gallery -snapshot gallery.png
 `Tabs`、`DatePicker`、`NumberInput`、`ComboBox` 和图表等复合控件通过 `.Element` 放入布局，并用 `.Element.Width(...)` 等方法设置尺寸；保留原对象，调用其专用方法更新值。`Badge`、`Avatar` 是静态装饰，更新内容时替换节点。
 
 列表、表格和树只绘制可见行。修改列表行内容后调用 `Refresh`，行数变化时调用 `SetCount`；修改表格数据后调用 `SetRows`。这些控件会在适用时复用滚动区域，减少重绘工作。Linux 上由 X 服务器保留窗口像素，fego 只通过有上限的临时条带绘制受损区域，不在客户端保留整窗图像。
+
+## 自定义行列表
+
+纯文本、固定行高的列表使用 `ui.List`。需要图标、按钮、开关或不同行高时，使用 `ui.VirtualList`：
+
+```go
+list := ui.VirtualList(ui.VirtualListOptions{Count: len(items), Name: func(i int) string {
+    return items[i].Name
+}}, func(i int) *ui.Element {
+    return ui.Row(ui.Text(items[i].Name).Grow(1), ui.Button("打开", func() { open(items[i]) }))
+})
+list.Fill()
+```
+
+虚拟列表只挂载可见行和少量相邻行。需要离开可视区域后保留的数据放在应用模型中。`Key` 让选择随数据重排，`Headers` 指定吸顶分组标题，`Reorder` 接收拖排结果。多选模式中 Shift 扩展选区，Ctrl 或 Command 切换单行。修改行数据后调用 `Refresh`。
 
 ## 文本与无障碍
 

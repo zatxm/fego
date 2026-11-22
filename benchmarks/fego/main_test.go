@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 func TestSceneFixturesAndUpdates(t *testing.T) {

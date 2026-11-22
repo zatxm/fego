@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 var componentScenes = []string{"table", "tree", "form", "editor", "linechart", "linechart-sparse", "barchart", "calendar", "image", "navigation", "richtext"}

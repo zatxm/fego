@@ -9,7 +9,7 @@ func (v *view) measure(e *Element) (w, h float32) {
 	s := &e.style
 	font := v.font(e)
 	switch e.kind {
-	case kBox:
+	case kBox, kVirtualRow:
 		visible := 0
 		var rowH float32
 		for _, c := range e.children {
@@ -81,7 +81,7 @@ func (v *view) measure(e *Element) (w, h float32) {
 	case kSeparator:
 		w = 1
 		h = 1
-	case kList, kTable, kTree:
+	case kList, kTable, kTree, kVirtualList:
 		w = 280
 		h = 240
 	case kImage:
@@ -123,7 +123,11 @@ func (v *view) layout(e *Element, r, clip Rect) {
 	}
 	s := &e.style
 	inner := Rect{r.X + s.padding[3], r.Y + s.padding[0], max(0, r.W-s.padding[1]-s.padding[3]), max(0, r.H-s.padding[0]-s.padding[2])}
-	if e.kind != kBox {
+	if e.kind == kVirtualList {
+		e.virtual.layout(v, inner, clip)
+		return
+	}
+	if e.kind != kBox && e.kind != kVirtualRow {
 		return
 	}
 	if s.clip {
@@ -257,6 +261,10 @@ func (v *view) moveLayout(e *Element, y float32, clip Rect) {
 	}
 	e.rect.Y = y
 	e.clip = e.rect.intersect(clip)
+	if e.kind == kVirtualList {
+		v.layout(e, e.rect, clip)
+		return
+	}
 	if e.kind != kBox {
 		return
 	}
@@ -317,6 +325,9 @@ func (e *Element) headerHeight() float32 {
 	return 0
 }
 func (e *Element) maxScroll() float32 {
+	if e.kind == kVirtualList {
+		return max(0, float32(e.virtual.top(e.virtual.options.Count))-e.rect.H+e.style.padding[0]+e.style.padding[2])
+	}
 	if e.scrollable {
 		return max(0, e.contentH-e.rect.H+e.style.padding[0]+e.style.padding[2])
 	}

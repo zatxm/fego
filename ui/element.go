@@ -16,21 +16,44 @@ type Color = color.RGBA
 func RGB(r, g, b uint8) Color     { return Color{R: r, G: g, B: b, A: 255} }
 func RGBA(r, g, b, a uint8) Color { return Color{R: r, G: g, B: b, A: a} }
 
+// Theme maps the shadcn Neutral tokens to native sRGB colors. Accent and
+// AccentText are the existing fego names for primary and primary-foreground.
 type Theme struct {
 	Background, Surface, Raised, Text, Muted, Border, Accent, AccentText, Danger Color
+	InputBorder, Ring, Sidebar                                                   Color
+	Chart                                                                        [5]Color
 	FontSize                                                                     float32
 }
 
 var Light = Theme{
-	Background: RGB(247, 249, 252), Surface: RGB(255, 255, 255), Raised: RGB(241, 245, 249),
-	Text: RGB(24, 34, 52), Muted: RGB(100, 116, 139), Border: RGB(219, 226, 236),
-	Accent: RGB(65, 99, 235), AccentText: RGB(255, 255, 255), Danger: RGB(222, 69, 80), FontSize: 14,
+	Background: RGB(255, 255, 255), Surface: RGB(255, 255, 255), Raised: RGB(245, 245, 245),
+	Text: RGB(10, 10, 10), Muted: RGB(115, 115, 115), Border: RGB(229, 229, 229),
+	Accent: RGB(23, 23, 23), AccentText: RGB(250, 250, 250), Danger: RGB(231, 0, 11),
+	InputBorder: RGB(229, 229, 229), Ring: RGB(161, 161, 161), Sidebar: RGB(250, 250, 250),
+	Chart:    [5]Color{RGB(245, 74, 0), RGB(0, 150, 137), RGB(16, 78, 100), RGB(255, 185, 0), RGB(254, 154, 0)},
+	FontSize: 14,
 }
+
 var Dark = Theme{
-	Background: RGB(15, 23, 42), Surface: RGB(24, 34, 52), Raised: RGB(33, 46, 65),
-	Text: RGB(235, 240, 249), Muted: RGB(158, 174, 196), Border: RGB(51, 65, 85),
-	Accent: RGB(129, 153, 255), AccentText: RGB(15, 23, 42), Danger: RGB(255, 117, 125), FontSize: 14,
+	Background: RGB(10, 10, 10), Surface: RGB(23, 23, 23), Raised: RGB(38, 38, 38),
+	Text: RGB(250, 250, 250), Muted: RGB(161, 161, 161), Border: RGBA(255, 255, 255, 26),
+	Accent: RGB(229, 229, 229), AccentText: RGB(23, 23, 23), Danger: RGB(255, 100, 103),
+	InputBorder: RGBA(255, 255, 255, 38), Ring: RGB(115, 115, 115), Sidebar: RGB(23, 23, 23),
+	Chart:    [5]Color{RGB(20, 71, 230), RGB(0, 188, 125), RGB(254, 154, 0), RGB(173, 70, 255), RGB(255, 32, 86)},
+	FontSize: 14,
 }
+
+type tone uint8
+
+const (
+	standardTone tone = iota
+	mutedText
+	dangerText
+	sidebarSurface
+	mutedSurface
+	primarySurface
+	primaryText
+)
 
 type Align uint8
 
@@ -74,6 +97,8 @@ const (
 	kCanvas
 	kEditor
 	kRichText
+	kVirtualList
+	kVirtualRow
 )
 
 type direction uint8
@@ -85,14 +110,15 @@ const (
 )
 
 type style struct {
-	w, h, minW, minH, maxW, maxH, grow                        float32
-	padding                                                   [4]float32
-	gap, radius, font                                         float32
-	align, justify                                            Align
-	bg, fg, border                                            Color
-	bgSet, fgSet, borderSet, bold, fillW, fillH, shadow, clip bool
-	dir                                                       direction
-	columns                                                   int
+	w, h, minW, minH, maxW, maxH, grow                      float32
+	padding                                                 [4]float32
+	gap, radius, font                                       float32
+	align, justify                                          Align
+	bg, fg, border                                          Color
+	bgSet, fgSet, borderSet, bold, fillW, fillH, card, clip bool
+	dir                                                     direction
+	tone                                                    tone
+	columns                                                 int
 }
 
 // Element is owned by one view. Mutate it on the UI thread; use Window.Update
@@ -142,6 +168,10 @@ type widget struct {
 	cursor, anchor                             int
 	undo                                       []string
 	undoBytes                                  int
+	virtual                                    *VirtualListView
+	interval                                   *RangeSliderView
+	submit                                     func()
+	otpLength                                  int
 }
 
 // noWidget is read-only; own gives an element private state before any write.
@@ -157,7 +187,7 @@ func (e *Element) own() *widget {
 var elementIDs atomic.Uint64
 
 func element(k kind) *Element {
-	e := &Element{id: elementIDs.Add(1) << 32, kind: k, style: style{radius: 10, align: Stretch}, widget: &noWidget}
+	e := &Element{id: elementIDs.Add(1) << 32, kind: k, style: style{radius: 8, align: Stretch}, widget: &noWidget}
 	if k != kBox && k != kText && k != kSeparator {
 		e.widget = &widget{selected: -1}
 	}
@@ -181,9 +211,8 @@ func Grid(columns int, children ...*Element) *Element {
 	return e
 }
 func Card(children ...*Element) *Element {
-	e := Column(children...).Padding(20).Radius(14)
-	e.style.shadow = true
-	e.style.borderSet = true
+	e := Column(children...).Padding(20).Radius(12)
+	e.style.card = true
 	return e
 }
 
@@ -358,9 +387,16 @@ func (e *Element) listText(row int) string {
 	v := e.view
 	id := [2]uint64{e.id, uint64(row)}
 	if label, ok := v.rowLabels[id]; ok {
-		return label
+		if e.kind != kTable || matchesRowLabel(label, e.rows[row]) {
+			return label
+		}
 	}
-	label := e.rowText(row)
+	var label string
+	if e.kind == kTable {
+		label = strings.Join(e.rows[row], ", ")
+	} else {
+		label = e.rowText(row)
+	}
 	if len(label) <= 1024 {
 		if v.rowLabels == nil {
 			v.rowLabels = make(map[[2]uint64]string)
@@ -368,17 +404,42 @@ func (e *Element) listText(row int) string {
 		if len(v.rowLabels) >= 64 {
 			clear(v.rowLabels)
 		}
-		v.rowLabels[id] = strings.Clone(label)
+		if e.kind == kList {
+			label = strings.Clone(label)
+		}
+		v.rowLabels[id] = label
 	}
 	return label
 }
+
+// Reuse the accessible label even when a table's caller edits a supplied slice.
+func matchesRowLabel(label string, cells []string) bool {
+	for i, cell := range cells {
+		if i > 0 {
+			var ok bool
+			label, ok = strings.CutPrefix(label, ", ")
+			if !ok {
+				return false
+			}
+		}
+		var ok bool
+		label, ok = strings.CutPrefix(label, cell)
+		if !ok {
+			return false
+		}
+	}
+	return label == ""
+}
+
 func (e *Element) touch(layout bool) {
 	if e.view != nil {
-		clear(e.view.rowLabels)
 		e.view.invalidate(e, layout)
 	}
 }
 func (e *Element) SetText(s string) *Element {
+	if e.kind == kInput && e.otpLength > 0 {
+		s = otpDigits(s, e.otpLength)
+	}
 	if e.text != s {
 		variable := e.kind == kText || e.kind == kButton || e.kind == kCheck || e.kind == kSwitch || e.kind == kRadio
 		layout := variable && e.style.w == 0
@@ -388,10 +449,10 @@ func (e *Element) SetText(s string) *Element {
 			layout = layout || before != after
 		}
 		e.text = s
-		n := utf8.RuneCountInString(s)
-		e.own().cursor = min(e.cursor, n)
-		e.own().anchor = min(e.anchor, n)
 		if e.kind == kInput || e.kind == kEditor {
+			n := utf8.RuneCountInString(s)
+			e.own().cursor = min(e.cursor, n)
+			e.own().anchor = min(e.anchor, n)
 			e.own().undo = nil
 			e.own().undoBytes = 0
 			e.scroll = min(e.scroll, e.maxScroll())
@@ -415,6 +476,9 @@ func (e *Element) SetValue(v float64) *Element {
 		panic("ui: value must be finite")
 	}
 	v = max(e.minimum, min(e.maximum, v))
+	if e.kind == kSlider && e.interval != nil {
+		v = min(e.interval.high, v)
+	}
 	if e.value != v {
 		e.own().value = v
 		e.touch(false)
@@ -435,6 +499,9 @@ func (e *Element) SetSelected(i int) *Element {
 func (e *Element) Selected() int { return e.selected }
 func (e *Element) SetRows(rows [][]string) *Element {
 	e.own().rows = rows
+	if e.view != nil {
+		clear(e.view.rowLabels)
+	}
 	e.own().order = nil
 	e.own().selected = -1
 	e.scroll = 0
@@ -446,6 +513,9 @@ func (e *Element) SetCount(n int) *Element {
 		panic("ui: negative list length")
 	}
 	e.own().count = n
+	if e.view != nil {
+		clear(e.view.rowLabels)
+	}
 	e.own().selected = min(e.selected, n-1)
 	e.scroll = min(e.scroll, e.maxScroll())
 	e.touch(false)
@@ -487,10 +557,21 @@ func (e *Element) Padding(values ...float32) *Element {
 }
 func (e *Element) Radius(radius float32) *Element { e.style.radius = radius; e.touch(false); return e }
 func (e *Element) Background(c Color) *Element {
-	e.style.bg, e.style.bgSet = c, true
+	if !e.style.bgSet || e.style.bg != c {
+		e.style.bg, e.style.bgSet = c, true
+		e.touch(false)
+	}
+	return e
+}
+
+// Muted uses the active theme's muted foreground color.
+func (e *Element) Muted() *Element {
+	e.style.tone = mutedText
+	e.style.fgSet = false
 	e.touch(false)
 	return e
 }
+
 func (e *Element) TextColor(c Color) *Element {
 	e.style.fg, e.style.fgSet = c, true
 	e.touch(false)
@@ -531,9 +612,19 @@ func (e *Element) Hidden(hidden bool) *Element {
 	}
 	return e
 }
-func (e *Element) Placeholder(s string) *Element     { e.own().placeholder = s; e.touch(false); return e }
-func (e *Element) Password(secret bool) *Element     { e.own().password = secret; e.touch(false); return e }
-func (e *Element) Label(s string) *Element           { e.label = s; e.touch(false); return e }
+func (e *Element) Placeholder(s string) *Element { e.own().placeholder = s; e.touch(false); return e }
+func (e *Element) Password(secret bool) *Element { e.own().password = secret; e.touch(false); return e }
+func (e *Element) Label(s string) *Element       { e.label = s; e.touch(false); return e }
+
+// OnSubmit invokes fn when Enter is pressed in a single-line text field.
+func (e *Element) OnSubmit(fn func()) *Element {
+	if e.kind != kInput || e.multiline {
+		panic("ui: OnSubmit requires a single-line text input")
+	}
+	e.own().submit = fn
+	return e
+}
+
 func (e *Element) OnClick(fn func()) *Element        { e.onClick = fn; return e }
 func (e *Element) OnChange(fn func(string)) *Element { e.own().onChange = fn; return e }
 func (e *Element) OnToggle(fn func(bool)) *Element   { e.own().onToggle = fn; return e }
@@ -541,12 +632,17 @@ func (e *Element) OnValue(fn func(float64)) *Element { e.own().onValue = fn; ret
 func (e *Element) OnSelect(fn func(int)) *Element    { e.own().onSelect = fn; return e }
 func (e *Element) OnLink(fn func(string)) *Element   { e.own().onLink = fn; return e }
 func (e *Element) Bounds() Rect                      { return e.rect }
-func (e *Element) Refresh()                          { e.touch(false) }
+func (e *Element) Refresh() {
+	if e.view != nil {
+		clear(e.view.rowLabels)
+	}
+	e.touch(false)
+}
 
 func (e *Element) paintPadding(scale float32) int {
 	padding := float32(3)
-	if e.style.shadow {
-		padding = 7
+	if e.style.card {
+		padding = 6
 	}
 	return max(4, int(math.Ceil(float64(padding*scale))))
 }

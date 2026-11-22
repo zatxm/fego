@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zatxm/fego"
-	"github.com/zatxm/fego/ui"
+	"github.com/zatxm/fego/v26"
+	"github.com/zatxm/fego/v26/ui"
 )
 
 func TestComponentScenesRender(t *testing.T) {

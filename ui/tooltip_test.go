@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 func TestTooltipFollowsPointerAndDismisses(t *testing.T) {

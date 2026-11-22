@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 func TestTabsSegmentsAndAccordion(t *testing.T) {

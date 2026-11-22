@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/zatxm/fego/internal/platform"
+	"github.com/zatxm/fego/v26/internal/platform"
 )
 
 func init() { runtime.LockOSThread() }
@@ -18,18 +18,21 @@ type EventKind = platform.EventKind
 type AccessNode = platform.AccessNode
 
 const (
-	Paint        = platform.Paint
-	Resize       = platform.Resize
-	PointerMove  = platform.PointerMove
-	PointerDown  = platform.PointerDown
-	PointerUp    = platform.PointerUp
-	Scroll       = platform.Scroll
-	KeyDown      = platform.KeyDown
-	KeyUp        = platform.KeyUp
-	Text         = platform.Text
-	Focus        = platform.Focus
-	Close        = platform.Close
-	AccessAction = platform.AccessAction
+	Paint         = platform.Paint
+	Resize        = platform.Resize
+	PointerMove   = platform.PointerMove
+	PointerDown   = platform.PointerDown
+	PointerUp     = platform.PointerUp
+	Scroll        = platform.Scroll
+	KeyDown       = platform.KeyDown
+	KeyUp         = platform.KeyUp
+	Text          = platform.Text
+	Focus         = platform.Focus
+	Close         = platform.Close
+	AccessAction  = platform.AccessAction
+	PointerCancel = platform.PointerCancel
+	TextEdit      = platform.TextEdit
+	TextSelection = platform.TextSelection
 )
 
 // Host methods are called on the UI thread. Sizes and events use device pixels.
@@ -415,6 +418,16 @@ func (w *Window) TextInput(active bool, caret image.Rectangle) {
 	w.native.TextInput(active, caret)
 	w.textInputDisabled = !active
 }
+
+// SetTextInputState supplies composition context to a host that uses it.
+func (w *Window) SetTextInputState(text string, start, end int, password, numeric bool) {
+	if host, ok := w.native.(interface {
+		SetTextInputState(string, int, int, bool, bool)
+	}); ok {
+		host.SetTextInputState(text, start, end, password, numeric)
+	}
+}
+
 func (w *Window) SetAccessibility(nodes []AccessNode) {
 	if native, ok := w.native.(platform.Accessible); ok {
 		native.SetAccessibility(nodes)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/zatxm/fego"
+	"github.com/zatxm/fego/v26"
 )
 
 type accessTarget struct {
@@ -51,8 +51,10 @@ func (v *view) updateAccessibility() {
 			role = "slider"
 		case kProgress:
 			role = "progress"
-		case kList:
+		case kList, kVirtualList:
 			role = "list"
+		case kVirtualRow:
+			role = "row"
 		case kTable:
 			role = "table"
 		case kTree:
@@ -82,8 +84,26 @@ func (v *view) updateAccessibility() {
 			}
 		}
 		node := fego.AccessNode{ID: e.id, Parent: parent, Role: role, Label: label, Value: value, Bounds: e.clip.pixels(v.scale), Disabled: disabled, Focused: v.focused == e, Checked: e.checked, Min: e.minimum, Max: e.maximum, Number: e.value, Caret: e.cursor, SelectionStart: min(e.cursor, e.anchor), SelectionEnd: max(e.cursor, e.anchor)}
+		if e.kind == kVirtualRow {
+			l := e.parent.virtual
+			_, node.Selected = l.chosen[l.key(e.selected)]
+			node.Focused = node.Focused || v.focused == l.Element && l.lead == e.selected
+		}
 		nodes = append(nodes, node)
 		v.access[e.id] = accessTarget{element: e, row: -1, disabled: disabled}
+		if e.kind == kSlider && e.interval != nil {
+			nodes[len(nodes)-1].Label = strings.TrimSpace(node.Label + " lower value")
+			nodes[len(nodes)-1].Max = e.interval.high
+			node.ID++
+			node.Label = strings.TrimSpace(node.Label + " upper value")
+			node.Min, node.Number = e.value, e.interval.high
+			node.Focused = v.focused == e && e.interval.activeHigh
+			if node.Focused {
+				nodes[len(nodes)-1].Focused = false
+			}
+			nodes = append(nodes, node)
+			v.access[node.ID] = accessTarget{element: e, row: 1, disabled: disabled}
+		}
 		for _, child := range e.children {
 			walk(child, e.id, disabled)
 		}
@@ -104,7 +124,7 @@ func (v *view) updateAccessibility() {
 					if len(e.order) > 0 {
 						index = e.order[row]
 					}
-					text = strings.Join(e.rows[index], ", ")
+					text = e.listText(index)
 				}
 				r := Rect{e.rect.X, e.rect.Y + e.headerHeight() + float32(row)*e.rowHeight() - e.scroll, e.rect.W, e.rowHeight()}.intersect(e.clip)
 				id := e.id + uint64(row) + 1
@@ -167,8 +187,16 @@ func (v *view) accessAction(ev fego.Event) {
 		}
 		return
 	}
+	if e.kind == kVirtualRow && (ev.Action == "press" || ev.Action == "select") {
+		v.focus(e.parent)
+		e.parent.virtual.choose(e.selected, false, false)
+		return
+	}
 	switch ev.Action {
 	case "focus":
+		if e.kind == kSlider && e.interval != nil {
+			e.interval.activeHigh = target.row == 1
+		}
 		if e.interactive() {
 			v.focus(e)
 		}
@@ -225,6 +253,10 @@ func (v *view) accessAction(ev fego.Event) {
 		case kSlider:
 			n, err := strconv.ParseFloat(ev.Text, 64)
 			if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+				return
+			}
+			if r := e.interval; r != nil {
+				r.move(n, target.row == 1)
 				return
 			}
 			e.SetValue(n)

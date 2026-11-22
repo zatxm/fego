@@ -130,7 +130,7 @@ func Field(label string, control *Element, help string) *Element {
 	control.Label(label)
 	children := []*Element{Text(label).FontSize(13).Bold(), control.FillWidth()}
 	if help != "" {
-		children = append(children, Text(help).FontSize(12))
+		children = append(children, Text(help).FontSize(12).Muted())
 	}
 	return Column(children...).Gap(7)
 }

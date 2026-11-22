@@ -18,6 +18,9 @@ const (
 	Focus
 	Close
 	AccessAction
+	PointerCancel
+	TextEdit
+	TextSelection
 )
 
 // A Paint event may carry the lost area in X, Y, Width and Height (device
@@ -32,6 +35,7 @@ type Event struct {
 	Text                       string
 	Shift, Control, Alt, Super bool
 	Focused, Destroyed         bool
+	Start, End                 int // rune range for TextEdit and TextSelection
 	AccessID                   uint64
 	Action                     string
 }

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zatxm/fego"
-	fonttext "github.com/zatxm/fego/internal/text"
+	"github.com/zatxm/fego/v26"
+	fonttext "github.com/zatxm/fego/v26/internal/text"
 )
 
 func TestFillDimensionsAndScrollClipping(t *testing.T) {
