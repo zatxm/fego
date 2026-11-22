@@ -55,6 +55,13 @@ jobs:
             go test -c -o "$RUNNER_TEMP/platform-${GOOS}-${GOARCH}.test" ./internal/platform
           done
 
+      - name: Build browser WASM
+        if: runner.os == 'Linux'
+        run: go build ./...
+        env:
+          GOOS: js
+          GOARCH: wasm
+
       - name: Build the Android example (arm64 and amd64)
         if: runner.os == 'Linux'
         run: >-

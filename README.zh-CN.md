@@ -2,7 +2,7 @@
 
 [English](README.md) | **简体中文**
 
-轻量的 Go 原生桌面和移动端 UI 工具包。Linux、Windows、macOS 桌面构建使用纯 Go，Android 和 iOS 使用各自的原生 SDK。
+轻量的 Go UI 工具包，支持原生桌面、移动端和浏览器。Linux、Windows、macOS 桌面构建使用纯 Go，Android 和 iOS 使用各自的原生 SDK。
 
 通过 Go API 创建和更新控件，构建布局、表单、数据视图和文本编辑界面。默认浅色和深色主题使用 [shadcn Neutral 配色](https://ui.shadcn.com/docs/theming#default-theme-css)。
 
@@ -21,6 +21,7 @@
 | macOS | Cocoa | amd64、arm64 |
 | Android | 原生 Activity | arm64、amd64 |
 | iOS | UIKit | arm64 |
+| 浏览器 | Canvas | WebAssembly |
 
 Linux 运行时需要 X11 或 XWayland；本地服务器与 `libXext` 支持 MIT-SHM 时，窗口更新使用共享内存，否则回退为普通上传。中文显示需要系统中文字体，建议安装 Noto Sans CJK；Windows 和 macOS 使用系统字体。没有可用的系统拉丁字体时，会回退到内嵌 Go 字体。
 
@@ -88,6 +89,20 @@ go run ./examples/gallery -snapshot gallery.png
 
 构建 Android 或 iOS 应用请参阅[移动端指南](docs/mobile.md)。
 
+## 在浏览器运行
+
+将同一套 Go 控件构建成 WebAssembly，再通过 HTTP 打开。
+
+```sh
+mkdir -p /tmp/fego-web
+cp examples/web/index.html examples/web/main.js /tmp/fego-web/
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" /tmp/fego-web/
+GOOS=js GOARCH=wasm go build -o /tmp/fego-web/app.wasm ./examples/studio
+python3 -m http.server 8080 --directory /tmp/fego-web
+```
+
+打开 `http://localhost:8080`。窗口挂载到 ID 为 `fego` 的元素。为挂载元素设置高度并添加 `data-fego-fill`，窗口尺寸就会随容器调整。`wasm_exec.js` 需要来自构建应用时使用的 Go 工具链。用 `?dark` 切换深色主题。把 `sample.webm` 放在 `app.wasm` 旁后，可用 `?video=sample.webm` 打开视频标签页。
+
 ## 系统托盘与多窗口
 
 在支持托盘的桌面会话运行 `go run ./examples/tray`。示例从托盘启动，可以通过菜单打开窗口。关闭窗口后应用仍在后台运行，从托盘选择 **Quit** 可退出。
@@ -106,11 +121,11 @@ go run ./examples/gallery -snapshot gallery.png
 | 基础控件 | Text、RichText、Button、PrimaryButton、Checkbox、Radio、Switch、Separator、Image |
 | 表单 | TextInput、TextArea、密码、Field、Form、Select、ComboBox、Autocomplete、SearchField、MultiSelect、TokenField、InputGroup、InputOTP、NumberInput、Stepper、DecimalInput、TimeInput、ColorPicker、Slider、RangeSlider、Rating、Progress |
 | 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Sidebar、CommandPalette、Pagination、Menu、Dropdown、SplitButton、Dialog、Drawer、Toast、Badge、Avatar |
-| 数据 | List、VirtualList、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart |
-| 日期与文档 | Calendar、DatePicker、带行号的 CodeEditor、Markdown 常用语法 |
-| 绘图 | Canvas、Painter 的矩形、圆角、圆、线、文本、图片、Theme、Bounds |
+| 数据 | List、VirtualList、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart、AreaChart、StackedBarChart、PieChart |
+| 日期与文档 | Calendar、DatePicker、CodeEditor、Editor、MarkdownEditor、Diff、Merge |
+| 绘图和媒体 | Canvas、Painter、Path、EaseInOut、Spring、Keyframes、Timeline、Video、可选 GPU 呈现和 GLSL 着色器 |
 | 输入 | 鼠标、滚轮、Tab 与方向键、Unicode、选择、剪贴板、撤销、系统输入法提交文本 |
-| 无障碍 | Linux AT-SPI、Windows MSAA、macOS NSAccessibility |
+| 无障碍 | Linux AT-SPI、Windows MSAA、macOS NSAccessibility、浏览器 ARIA |
 
 ## 更新状态与布局
 
@@ -139,6 +154,16 @@ list.Fill()
 
 虚拟列表只挂载可见行和少量相邻行。需要离开可视区域后保留的数据放在应用模型中。`Key` 让选择随数据重排，`Headers` 指定吸顶分组标题，`Reorder` 接收拖排结果。多选模式中 Shift 扩展选区，Ctrl 或 Command 切换单行。修改行数据后调用 `Refresh`。
 
+## 文档、绘图和视频
+
+用 `go run ./examples/studio` 体验编辑器、三方合并、动画绘图、图表和 GPU 开关。用 `go run ./examples/studio -video path/to/file.webm` 打开视频标签页。桌面端通过 PATH 中的 FFmpeg 读取本地文件并播放视频轨。浏览器端使用浏览器解码器，可播放音轨，媒体地址需要同源或允许跨域访问。在浏览器点击按钮等用户手势中调用 `Play`。视频播放支持桌面端和浏览器。
+
+`ui.Editor` 提供查找替换、折叠范围和多光标，按住 Alt 点击可添加光标，点击行号旁的箭头可折叠或展开缩进块。`ui.MarkdownEditor` 提供预览。`ui.Diff` 并排显示差异。`ui.Merge` 自动合并独立修改，重叠修改可逐处选择保留哪一侧。`Text` 会返回结果并报告冲突是否都已解决。
+
+在画布中使用 `ui.Path`，用 `FillPath` 填充或用 `StrokePath` 描边。图表使用 shadcn Neutral 配色，鼠标悬停或用方向键选中时会显示数值。`ui.Animate` 和 `ui.Timeline` 在 UI 线程更新，只在动画运行期间调度帧。
+
+GPU 呈现默认关闭。创建窗口时可设置 `WindowOptions.GPU`，也可以在 UI 线程调用 `window.SetGPUEnabled(true)`。Linux、Windows 和 macOS 使用 OpenGL，浏览器使用 WebGL 2。用 `window.GPUActive()` 检查是否成功启用。硬件路径不可用时回退至 CPU 呈现。控件和路径由 Go 栅格化，可用 `window.SetFragmentShader` 通过 `frameTexture` 和 `frameUV` 应用整窗 GLSL 效果。移动端继续使用系统合成器。
+
 ## 文本与无障碍
 
 中文、日文等文本依赖系统字体提供相应字形。文本编辑位置按 Unicode rune 计算，暂不支持完整的字素簇编辑、复杂文字 shaping、BiDi 或彩色 emoji。
@@ -147,7 +172,7 @@ list.Fill()
 
 ## 功能边界
 
-- 使用 CPU 绘制；暂不支持 GPU 自定义着色器、3D、视频或原生 Wayland 后端。
+- Linux 窗口使用 X11 或 XWayland，画布支持二维绘图。
 - `CodeEditor` 提供文本编辑和行号，不包含 LSP 或富文本所见即所得编辑。
 - Markdown 支持常用语法，尚未覆盖完整 CommonMark；HTML 按普通文本显示，链接通过回调通知应用，仅接受 http、https 和 mailto。
 

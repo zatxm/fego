@@ -250,6 +250,8 @@ func loadX11() error {
 }
 
 type xBackend struct {
+	eglDisplay                                                                                   uintptr
+	eglContexts                                                                                  int
 	display, root, visual, im                                                                    uintptr
 	depth                                                                                        int32
 	fd                                                                                           int
@@ -278,6 +280,7 @@ type xBackend struct {
 }
 
 type xWindow struct {
+	graphics                               gpuState
 	b                                      *xBackend
 	id, gc, ic                             uintptr
 	emit                                   func(Event)
@@ -785,6 +788,9 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 	if w.closed || src == nil || len(damage) == 0 {
 		return
 	}
+	if w.graphics.present(src, damage) {
+		return
+	}
 	bounds := src.Bounds()
 	if !w.presented || w.surfaceSize != bounds.Size() {
 		damage = []image.Rectangle{bounds}
@@ -941,6 +947,9 @@ func xValidRGBA(src *image.RGBA) bool {
 }
 
 func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
+	if w.GPUActive() {
+		return false
+	}
 	if w.closed || !w.presented || delta.X != 0 || delta.Y == 0 || !r.In(image.Rect(0, 0, w.width, w.height)) {
 		return false
 	}
@@ -1060,6 +1069,7 @@ func (w *xWindow) dispose(destroy bool) {
 	if w.closed {
 		return
 	}
+	w.graphics.close()
 	w.closed = true
 	if w.access != nil {
 		w.access.close()

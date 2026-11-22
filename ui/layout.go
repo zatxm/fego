@@ -340,7 +340,13 @@ func (e *Element) maxScroll() float32 {
 		if e.view != nil {
 			lineH = e.view.text.LineHeight(font, false)
 		}
-		return max(0, float32(strings.Count(e.text, "\n")+1)*lineH-e.rect.H+20)
+		lines := 1
+		if e.kind == kEditor {
+			lines = e.sourceIndex().visibleCount()
+		} else {
+			lines = strings.Count(e.text, "\n") + 1
+		}
+		return max(0, float32(lines)*lineH-e.rect.H+20)
 	}
 	return max(0, float32(e.rowCount())*e.rowHeight()-e.rect.H+e.headerHeight())
 }

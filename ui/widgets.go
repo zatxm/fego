@@ -206,28 +206,67 @@ func Dialog(title string, content *Element, actions ...*Element) *Element {
 // shortcut: paragraphs keep source line breaks; use width-aware text layout
 // when adding document-style automatic paragraph reflow.
 func Markdown(source string, onLink func(string)) *Element {
-	root := Column().Gap(9)
-	var code []string
-	fenced := false
-	flushCode := func() {
-		root.Append(Card(Text(strings.Join(code, "\n")).FontSize(13)).Padding(12).Radius(8))
-		code = nil
+	var rows []*Element
+	markdownBlocks(source, func(block markdownBlock) { rows = append(rows, block.element(onLink)) })
+	return Column(rows...).Gap(9)
+}
+
+type markdownBlock struct {
+	kind         byte
+	depth        int
+	text, prefix string
+}
+
+func (b markdownBlock) element(onLink func(string)) *Element {
+	switch b.kind {
+	case 'c':
+		return Card(Text(b.text).FontSize(13)).Padding(12).Radius(8)
+	case 'h':
+		return Text(b.text).FontSize(float32(30 - b.depth*2)).Bold()
+	case 's':
+		return Separator()
+	case ' ':
+		return Box().Height(4)
 	}
-	for _, line := range strings.Split(strings.ReplaceAll(source, "\r\n", "\n"), "\n") {
+	text := RichText(markdownSpans(b.text)...)
+	if onLink != nil {
+		text.OnLink(onLink)
+	}
+	if b.prefix != "" {
+		return Row(Text(b.prefix).Width(24), text.Grow(1)).AlignItems(Start)
+	}
+	return text
+}
+
+// markdownBlocks scans line boundaries once. The preview attaches only visible
+// blocks through VirtualList, while Markdown keeps its ordinary element tree.
+func markdownBlocks(source string, emit func(markdownBlock)) {
+	codeStart := -1
+	offset := 0
+	for line := range strings.SplitSeq(source, "\n") {
+		start := offset
+		offset += len(line) + 1
+		line = strings.TrimSuffix(line, "\r")
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "```") {
-			if fenced {
-				flushCode()
+			if codeStart >= 0 {
+				end := start
+				if end > codeStart {
+					end--
+				}
+				code := strings.ReplaceAll(source[codeStart:end], "\r\n", "\n")
+				emit(markdownBlock{kind: 'c', text: strings.TrimSuffix(code, "\r")})
+				codeStart = -1
+			} else {
+				codeStart = min(offset, len(source))
 			}
-			fenced = !fenced
 			continue
 		}
-		if fenced {
-			code = append(code, line)
+		if codeStart >= 0 {
 			continue
 		}
 		if trimmed == "" {
-			root.Append(Box().Height(4))
+			emit(markdownBlock{kind: ' '})
 			continue
 		}
 		level := 0
@@ -235,11 +274,11 @@ func Markdown(source string, onLink func(string)) *Element {
 			level++
 		}
 		if level > 0 && level < len(trimmed) && trimmed[level] == ' ' {
-			root.Append(Text(strings.TrimSpace(trimmed[level:])).FontSize(float32(30 - level*2)).Bold())
+			emit(markdownBlock{kind: 'h', depth: level, text: strings.TrimSpace(trimmed[level:])})
 			continue
 		}
 		if trimmed == "---" || trimmed == "***" {
-			root.Append(Separator())
+			emit(markdownBlock{kind: 's'})
 			continue
 		}
 		prefix, body := "", trimmed
@@ -250,20 +289,12 @@ func Markdown(source string, onLink func(string)) *Element {
 				prefix, body = body[:at+1], body[at+2:]
 			}
 		}
-		text := RichText(markdownSpans(body)...)
-		if onLink != nil {
-			text.OnLink(onLink)
-		}
-		if prefix != "" {
-			root.Append(Row(Text(prefix).Width(24), text.Grow(1)).AlignItems(Start))
-		} else {
-			root.Append(text)
-		}
+		emit(markdownBlock{text: body, prefix: prefix})
 	}
-	if fenced {
-		flushCode()
+	if codeStart >= 0 {
+		code := strings.ReplaceAll(source[codeStart:], "\r\n", "\n")
+		emit(markdownBlock{kind: 'c', text: code})
 	}
-	return root
 }
 
 func markdownSpans(text string) []Span {

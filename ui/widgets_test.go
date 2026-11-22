@@ -188,7 +188,7 @@ func TestChartDataSnapshotUpdatesAndMissingValues(t *testing.T) {
 	view := NewTester(Column(chart.Element), 400, 300)
 	defer view.Close()
 	before := view.Snapshot()
-	plot := Rect{48, 44, chart.rect.W - 64, chart.rect.H - 78}
+	plot := chart.plot
 	x, y := int(chart.x(1, plot)), int(chart.y(1, plot))
 	if before.RGBAAt(x, y) == red {
 		t.Fatal("line bridged a missing sample")
@@ -226,7 +226,7 @@ func TestDenseChartKeepsNarrowSpikes(t *testing.T) {
 	chart := LineChart(Series{Values: values, Color: red})
 	view := NewTester(Column(chart.Element), 400, 280)
 	defer view.Close()
-	plot := Rect{48, 44, chart.rect.W - 64, chart.rect.H - 78}
+	plot := chart.plot
 	x, y := int(chart.x(1001, plot)), int(chart.y(10, plot))
 	found := false
 	img := view.Snapshot()

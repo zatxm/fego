@@ -237,6 +237,7 @@ type cocoaBackend struct {
 	running, quitting  bool
 }
 type cocoaWindow struct {
+	graphics                gpuState
 	backend                 *cocoaBackend
 	window, view, delegate  objc.ID
 	image                   uintptr
@@ -374,6 +375,12 @@ func (w *cocoaWindow) Present(img *image.RGBA, damage []image.Rectangle) {
 	if w.closed || img.Bounds().Empty() {
 		return
 	}
+	if w.GPUActive() {
+		if w.graphics.present(img, damage) {
+			return
+		}
+		damage = nil
+	}
 	data := mac.cfData(0, unsafe.Pointer(unsafe.SliceData(img.Pix)), int64(len(img.Pix)))
 	if data == 0 {
 		return
@@ -448,6 +455,7 @@ func (w *cocoaWindow) Close() {
 	if w.closed {
 		return
 	}
+	w.graphics.close()
 	w.closed = true
 	w.closeAccessibility()
 	delete(w.backend.windows, w.window)
@@ -549,7 +557,7 @@ func macViewMethods() []objc.MethodDef {
 				w.painting = true
 				defer func() { w.painting = false }()
 				w.events(Event{Kind: Paint})
-				if w.image != 0 && !w.closed {
+				if w.image != 0 && !w.closed && !w.GPUActive() {
 					ctx := macSend(macSend(macClass("NSGraphicsContext"), "currentContext"), "CGContext")
 					bounds := mac.rect(self, macSel("bounds"))
 					mac.save(uintptr(ctx))

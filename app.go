@@ -5,6 +5,7 @@ import (
 	"errors"
 	"image"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,7 @@ type WindowOptions struct {
 	Title         string
 	Width, Height int // initial logical pixels
 	Content       Content
+	GPU           bool        // opt in to hardware presentation when available
 	Icon          image.Image // overrides the application icon
 	TitleBarIcon  image.Image // optional title-bar accessory on macOS
 }
@@ -242,6 +244,9 @@ func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
 		return nil, err
 	}
 	w.native = n
+	if graphics, ok := n.(platform.Graphics); ok && o.GPU {
+		graphics.SetGPUEnabled(true)
+	}
 	w.view = o.Content.Mount(w)
 	a.windows[w] = struct{}{}
 	w.Invalidate()
@@ -264,6 +269,7 @@ type Window struct {
 	closed, invalid, ready bool
 	onReady                []func()
 	onClose                func(*CloseEvent)
+	done                   chan struct{}
 	textInputDisabled      bool
 }
 
@@ -290,6 +296,38 @@ func (w *Window) event(e Event) {
 	}
 }
 
+// SetGPUEnabled switches hardware presentation on or off on the UI thread.
+func (w *Window) SetGPUEnabled(enabled bool) {
+	if native, ok := w.native.(platform.Graphics); ok && !w.closed && native.SetGPUEnabled(enabled) {
+		if view, ok := w.view.(interface{ ResetPresenter() }); ok {
+			view.ResetPresenter()
+		}
+		w.event(Event{Kind: Paint})
+	}
+}
+
+// GPUActive reports whether this window is currently presenting through a GPU.
+func (w *Window) GPUActive() bool {
+	native, ok := w.native.(platform.Graphics)
+	return ok && !w.closed && native.GPUActive()
+}
+
+// SetFragmentShader compiles a GLSL fragment body on the UI thread. The body
+// defines main and may sample frameTexture at frameUV. An empty body resets it.
+func (w *Window) SetFragmentShader(source string) error {
+	if len(source) > 32<<10 || strings.ContainsRune(source, 0) {
+		return errors.New("fego: invalid fragment shader source")
+	}
+	if native, ok := w.native.(platform.ShaderPresenter); ok && !w.closed {
+		if err := native.SetFragmentShader(source); err != nil {
+			return err
+		}
+		w.event(Event{Kind: Paint})
+		return nil
+	}
+	return platform.ErrGPUInactive
+}
+
 func (w *Window) Size() (int, int, float32) { return w.width, w.height, w.scale }
 func (w *Window) Present(img *image.RGBA, damage []image.Rectangle) {
 	if w.closed {
@@ -303,6 +341,9 @@ func (w *Window) Present(img *image.RGBA, damage []image.Rectangle) {
 // presented pixels and send a Paint event after losing them, so content may
 // present only damaged regions instead of retaining a full-window image.
 func (w *Window) RetainsPixels() bool {
+	if native, ok := w.native.(interface{ UsesFullSurface() bool }); ok && native.UsesFullSurface() {
+		return false
+	}
 	_, ok := w.native.(platform.RegionPresenter)
 	return ok
 }
@@ -474,6 +515,18 @@ func (w *Window) control(fn func(platform.WindowControls)) {
 	})
 }
 
+// Done returns a channel closed when the window is destroyed. Get the channel
+// on the UI thread before passing it to a background task.
+func (w *Window) Done() <-chan struct{} {
+	if w.done == nil {
+		w.done = make(chan struct{})
+		if w.closed {
+			close(w.done)
+		}
+	}
+	return w.done
+}
+
 // Destroy closes the window without calling its close handler.
 func (w *Window) Destroy() { w.app.Post(w.destroy) }
 
@@ -482,6 +535,9 @@ func (w *Window) destroy() {
 		return
 	}
 	w.closed = true
+	if w.done != nil {
+		close(w.done)
+	}
 	w.onReady = nil
 	w.onClose = nil
 	if w.view != nil {

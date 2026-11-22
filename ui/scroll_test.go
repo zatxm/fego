@@ -89,6 +89,21 @@ func checkScrollPixels(t *testing.T, h *scrollScreen) {
 		}
 	}
 }
+func TestEditorReusesScrollPixels(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 2} {
+		e := CodeEditor(strings.Repeat("First line 中文\nSecond line\n", 200)).Fill()
+		host := newScrollScreen(View(e), scale, true)
+		host.Send(fego.Event{Kind: fego.Scroll, X: 120 * scale, Y: 140 * scale, DY: 40 * scale})
+		if host.copies != 1 {
+			t.Fatalf("editor at %.2f did not copy pixels", scale)
+		}
+		checkScrollPixels(t, host)
+		host.Send(fego.Event{Kind: fego.Scroll, X: 120 * scale, Y: 140 * scale, DY: -16 * scale})
+		checkScrollPixels(t, host)
+		host.Close()
+	}
+}
+
 func TestScrollingMatchesFullRepaint(t *testing.T) {
 	for _, scale := range []float32{1, 1.25, 2} {
 		for _, supported := range []bool{false, true} {

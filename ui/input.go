@@ -58,7 +58,7 @@ func (e *Element) interactive() bool {
 	case kVirtualRow:
 		return e.parent != nil && !e.parent.virtual.header(e.selected)
 	}
-	return e.onClick != nil || e.onLink != nil
+	return e.onClick != nil || e.onLink != nil || e.onPoint != nil
 }
 func hit(e *Element, x, y float32) *Element {
 	if e.hidden || e.disabled || !e.clip.contains(x, y) {
@@ -123,6 +123,9 @@ func (v *view) input(ev fego.Event) {
 			old := v.hover
 			v.hover = e
 			if old != nil {
+				if old.onHover != nil {
+					old.onHover(-1, -1)
+				}
 				v.invalidate(old, false)
 			}
 			if e != nil {
@@ -137,6 +140,9 @@ func (v *view) input(ev fego.Event) {
 				}
 			}
 			v.host.SetCursor(cursor)
+		}
+		if e != nil && e.onHover != nil {
+			e.onHover(x-e.rect.X, y-e.rect.Y)
 		}
 		if e := v.pressed; e != nil {
 			if e.kind == kSlider {
@@ -171,6 +177,25 @@ func (v *view) input(ev fego.Event) {
 			v.focus(e)
 		}
 		if e != nil {
+			if e.kind == kEditor {
+				state := e.sourceIndex()
+				if ev.Alt {
+					at := v.textPosition(e, x, y)
+					state.extra = append(state.extra, Selection{at, at})
+					v.pressed = nil
+					v.invalidate(e, false)
+					return
+				}
+				state.extra = state.extra[:0]
+				if x >= e.rect.X+32 && x < v.inputInner(e).X {
+					position := v.textPosition(e, v.inputInner(e).X+e.scrollX, y)
+					line, _ := state.locate(e.text, position)
+					if e.toggleGutter(line) {
+						v.pressed = nil
+						return
+					}
+				}
+			}
 			if e.kind == kInput || e.kind == kEditor {
 				e.own().cursor = v.textPosition(e, x, y)
 				if !ev.Shift {
@@ -408,6 +433,9 @@ func (v *view) focusNext(back bool) {
 	v.focus(list[i])
 }
 func (v *view) activate(e *Element, x, y float32) {
+	if e.onPoint != nil {
+		e.onPoint(x-e.rect.X, y-e.rect.Y)
+	}
 	switch e.kind {
 	case kCheck, kSwitch, kRadio:
 		if e.kind == kRadio {
@@ -466,6 +494,10 @@ func (v *view) activate(e *Element, x, y float32) {
 	}
 }
 func (v *view) navigate(e *Element, key string) {
+	if e.onNavigate != nil {
+		e.onNavigate(key)
+		return
+	}
 	if e.kind == kSlider {
 		step := e.maximum/100 - e.minimum/100
 		value := e.value
@@ -596,8 +628,8 @@ func (v *view) inputInner(e *Element) Rect {
 	r := e.rect
 	inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
 	if e.kind == kEditor {
-		inner.X += 34
-		inner.W -= 34
+		inner.X += 40
+		inner.W -= 40
 	}
 	return inner
 }
@@ -608,6 +640,15 @@ func (v *view) textPosition(e *Element, x, y float32) int {
 	inner := v.inputInner(e)
 	font := v.font(e)
 	row := max(0, int((y-inner.Y+e.scroll)/v.text.LineHeight(font, false)))
+	if e.kind == kEditor {
+		s := e.sourceIndex()
+		if row >= s.visibleCount() {
+			return s.runes
+		}
+		line := s.source(row)
+		head := s.head(e.text, line)
+		return head.rune + v.text.Hit(e.text[head.pos:lineEnd(e.text, head.pos)], font, false, x-inner.X+e.scrollX)
+	}
 	start, offset := 0, 0
 	for row > 0 {
 		at := strings.IndexByte(e.text[start:], '\n')
@@ -644,6 +685,13 @@ func (v *view) caretPosition(e *Element, inner Rect) (float32, float32) {
 		slot := e.otpSlot(min(e.cursor, e.otpLength-1))
 		return slot.X + slot.W/2, inner.Y
 	}
+	if e.kind == kEditor {
+		s := e.sourceIndex()
+		i, line := s.locate(e.text, e.cursor)
+		part := e.text[line.pos : line.pos+runeByteOffset(e.text[line.pos:], e.cursor-line.rune)]
+		w, _ := v.text.Measure(part, v.font(e), false)
+		return inner.X + w - e.scrollX, inner.Y + float32(s.visual(i))*v.text.LineHeight(v.font(e), false) - e.scroll
+	}
 	prefix := e.text[:runeByteOffset(e.text, e.cursor)]
 	row := strings.Count(prefix, "\n")
 	prefix = prefix[strings.LastIndexByte(prefix, '\n')+1:]
@@ -676,16 +724,32 @@ func (v *view) updateCaret() {
 		h.SetTextInputState(e.text, e.anchor, e.cursor, e.password, e.otpLength > 0)
 	}
 }
-func (v *view) replaceSelection(e *Element, text string) {
-	if text == "" && e.cursor == e.anchor {
-		return
+func (e *Element) remember() {
+	e.own().undo = append(e.undo, e.text)
+	e.own().undoBytes += len(e.text)
+	for len(e.undo) > 64 || e.undoBytes > 4<<20 {
+		e.own().undoBytes -= len(e.undo[0])
+		e.own().undo[0] = ""
+		e.own().undo = e.undo[1:]
 	}
-	if len(text) > 4<<20 {
+}
+
+func (v *view) replaceSelection(e *Element, text string) {
+	if len(text) > 4<<20 || v.editCarets(e, text, "") || (text == "" && e.cursor == e.anchor) {
 		return
 	}
 	a, b := min(e.cursor, e.anchor), max(e.cursor, e.anchor)
 	// Text input is bounded at its external clipboard/IME boundary.
-	if utf8.RuneCountInString(e.text)-(b-a)+utf8.RuneCountInString(text) > 1<<20 {
+	length := 0
+	var state *editorState
+	if e.kind == kEditor {
+		state = e.sourceIndex()
+		length = state.runes
+	} else {
+		length = utf8.RuneCountInString(e.text)
+	}
+	newRunes := utf8.RuneCountInString(text)
+	if length-(b-a)+newRunes > 1<<20 {
 		return
 	}
 	if e.otpLength > 0 {
@@ -695,21 +759,18 @@ func (v *view) replaceSelection(e *Element, text string) {
 			return
 		}
 	}
-	rs := []rune(e.text)
-	insert := []rune(text)
-	e.own().undo = append(e.undo, e.text)
-	e.own().undoBytes += len(e.text)
-	for len(e.undo) > 64 || e.undoBytes > 4<<20 {
-		e.own().undoBytes -= len(e.undo[0])
-		e.own().undo[0] = ""
-		e.own().undo = e.undo[1:]
+	var start, end int
+	if state != nil {
+		start, end = state.byteAt(e.text, a), state.byteAt(e.text, b)
+	} else {
+		start, end = runeByteOffset(e.text, a), runeByteOffset(e.text, b)
 	}
-	next := make([]rune, 0, len(rs)-(b-a)+len(insert))
-	next = append(next, rs[:a]...)
-	next = append(next, insert...)
-	next = append(next, rs[b:]...)
-	e.text = string(next)
-	e.own().cursor = a + len(insert)
+	e.remember()
+	if state != nil {
+		state.splice(e.text, a, b, start, end, text, newRunes)
+	}
+	e.text = e.text[:start] + text + e.text[end:]
+	e.own().cursor = a + utf8.RuneCountInString(text)
 	e.own().anchor = e.cursor
 	v.edited(e)
 }
@@ -731,13 +792,28 @@ func (v *view) edited(e *Element) {
 	}
 }
 func (v *view) editKey(e *Element, ev fego.Event) {
-	rs := []rune(e.text)
+	if e.kind == kEditor && v.sourceKey(e, ev) {
+		return
+	}
+	var rs []rune
 	command := ev.Control || ev.Super
+	var index *editorState
+	length := 0
+	if e.kind == kEditor {
+		index = e.sourceIndex()
+		length = index.runes
+		if command && (ev.Key == "ArrowLeft" || ev.Key == "ArrowRight") {
+			rs = []rune(e.text)
+		}
+	} else {
+		rs = []rune(e.text)
+		length = len(rs)
+	}
 	if command {
 		switch strings.ToLower(ev.Key) {
 		case "a":
 			e.own().anchor = 0
-			e.own().cursor = len(rs)
+			e.own().cursor = length
 			e.touch(false)
 			return
 		case "c", "x":
@@ -745,7 +821,11 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 				return
 			}
 			a, b := min(e.cursor, e.anchor), max(e.cursor, e.anchor)
-			v.host.SetClipboard(string(rs[a:b]))
+			if index != nil {
+				v.host.SetClipboard(e.text[index.byteAt(e.text, a):index.byteAt(e.text, b)])
+			} else {
+				v.host.SetClipboard(string(rs[a:b]))
+			}
 			if strings.ToLower(ev.Key) == "x" {
 				v.replaceSelection(e, "")
 			}
@@ -763,10 +843,14 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		case "z":
 			if len(e.undo) > 0 {
 				e.text = e.undo[len(e.undo)-1]
+				e.markEditorEdit()
+				if e.editor != nil {
+					e.editor.extra, e.editor.folds = nil, nil
+				}
 				e.own().undoBytes -= len(e.text)
 				e.own().undo[len(e.undo)-1] = ""
 				e.own().undo = e.undo[:len(e.undo)-1]
-				e.own().cursor = len([]rune(e.text))
+				e.own().cursor = utf8.RuneCountInString(e.text)
 				e.own().anchor = e.cursor
 				v.edited(e)
 			}
@@ -782,7 +866,7 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		v.replaceSelection(e, "")
 		return
 	case "Delete":
-		if e.cursor == e.anchor && e.cursor < len(rs) {
+		if e.cursor == e.anchor && e.cursor < length {
 			e.own().anchor = e.cursor + 1
 		}
 		v.replaceSelection(e, "")
@@ -799,7 +883,7 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 	case "ArrowLeft":
 		e.own().cursor = max(0, e.cursor-1)
 		if command {
-			for e.cursor > 0 && e.cursor < len(rs) && unicode.IsSpace(rs[e.cursor]) {
+			for e.cursor > 0 && e.cursor < length && unicode.IsSpace(rs[e.cursor]) {
 				e.own().cursor--
 			}
 			for e.cursor > 0 && !unicode.IsSpace(rs[e.cursor-1]) {
@@ -807,15 +891,18 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 			}
 		}
 	case "ArrowRight":
-		e.own().cursor = min(len(rs), e.cursor+1)
+		e.own().cursor = min(length, e.cursor+1)
 		if command {
-			for e.cursor < len(rs) && !unicode.IsSpace(rs[e.cursor]) {
+			for e.cursor < length && !unicode.IsSpace(rs[e.cursor]) {
 				e.own().cursor++
 			}
 		}
 	case "Home":
 		if command {
 			e.own().cursor = 0
+		} else if index != nil {
+			_, line := index.locate(e.text, e.cursor)
+			e.own().cursor = line.rune
 		} else {
 			for e.cursor > 0 && rs[e.cursor-1] != '\n' {
 				e.own().cursor--
@@ -823,9 +910,12 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		}
 	case "End":
 		if command {
-			e.own().cursor = len(rs)
+			e.own().cursor = length
+		} else if index != nil {
+			_, line := index.locate(e.text, e.cursor)
+			e.own().cursor = line.rune + utf8.RuneCountInString(e.text[line.pos:lineEnd(e.text, line.pos)])
 		} else {
-			for e.cursor < len(rs) && rs[e.cursor] != '\n' {
+			for e.cursor < length && rs[e.cursor] != '\n' {
 				e.own().cursor++
 			}
 		}
@@ -843,7 +933,11 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		e.own().anchor = e.cursor
 	}
 	if old != e.cursor {
-		e.touch(false)
+		if index != nil {
+			v.revealEditorCaret(e)
+		} else {
+			e.touch(false)
+		}
 		v.updateCaret()
 	}
 }

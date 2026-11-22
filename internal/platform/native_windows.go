@@ -113,8 +113,9 @@ type windowsBackend struct {
 	closed         atomic.Bool
 }
 type windowsWindow struct {
-	access *winAccessTree
-	title  string
+	graphics gpuState
+	access   *winAccessTree
+	title    string
 
 	backend                  *windowsBackend
 	hwnd, paintDC, cursor    uintptr
@@ -250,6 +251,12 @@ func (w *windowsWindow) Present(img *image.RGBA, damage []image.Rectangle) {
 		return
 	}
 	w.frame = img
+	if w.GPUActive() {
+		if w.graphics.present(img, damage) {
+			return
+		}
+		damage = nil
+	}
 	dc := w.paintDC
 	if dc == 0 {
 		dc, _, _ = winGetDC.Call(w.hwnd)
@@ -397,6 +404,7 @@ func (w *windowsWindow) TextInput(enabled bool, caret image.Rectangle) {
 }
 func (w *windowsWindow) Close() {
 	if !w.closed {
+		w.graphics.close()
 		w.closed = true
 		if w.access != nil {
 			w.access.close()
@@ -494,7 +502,7 @@ func windowProcedure(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 		dc, _, _ := winBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&p)))
 		w.paintDC = dc
 		emit(Event{Kind: Paint})
-		if !w.closed {
+		if !w.closed && !w.GPUActive() {
 			w.blit(dc, image.Rect(int(p.Rect.Left), int(p.Rect.Top), int(p.Rect.Right), int(p.Rect.Bottom)))
 		}
 		w.paintDC = 0
@@ -508,6 +516,7 @@ func windowProcedure(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	case 0x02:
 		delete(b.windows, hwnd)
 		if !w.closed {
+			w.graphics.close()
 			w.closed = true
 			w.releaseIcons()
 			emit(Event{Kind: Close, Destroyed: true})

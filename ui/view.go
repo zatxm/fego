@@ -111,6 +111,14 @@ type view struct {
 	scrollCopyOK            bool
 }
 
+func (v *view) ResetPresenter() {
+	v.region = nil
+	if r, ok := v.host.(regionHost); ok && r.RetainsPixels() {
+		v.region = r
+	}
+	v.size = image.Rectangle{}
+}
+
 func (v *view) Close() {
 	v.dismissTip()
 	v.rowLabels = nil

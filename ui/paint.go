@@ -4,7 +4,6 @@ import (
 	"image"
 	"image/color"
 	"math"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -370,7 +369,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	if s.borderSet && s.border.A != 0 {
 		border = s.border
 	}
-	if !disabled && v.hover == e {
+	if !disabled && v.hover == e && e.onHover == nil {
 		border = mix(border, t.Ring, .45)
 	}
 	if v.focused == e {
@@ -523,9 +522,10 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, max(0, s.radius-1), t.Surface)
 		inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
 		if e.kind == kEditor {
-			inner.X += 34
-			inner.W -= 34
-			p.Rect(Rect{r.X + 1, r.Y + 1, 34, r.H - 2}, t.Raised)
+			inner = v.inputInner(e)
+			p.Rect(Rect{r.X + 1, r.Y + 1, 48, r.H - 2}, t.Raised)
+			v.paintSource(p, e, inner, font, fg)
+			break
 		}
 		p.clip = p.clip.Intersect(inner.pixels(v.scale))
 		text := e.text
@@ -547,12 +547,6 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			}
 			if y+lineH >= inner.Y {
 				p.Label(line, inner.X-e.scrollX, y, font, ink, false)
-				if e.kind == kEditor {
-					saved := p.clip
-					p.clip = oldClip.Intersect(r.pixels(v.scale))
-					p.Label(strconv.Itoa(i+1), r.X+8, y, font-2, t.Muted, false)
-					p.clip = saved
-				}
 			}
 			i++
 		}

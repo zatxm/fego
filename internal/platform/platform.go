@@ -98,3 +98,9 @@ type PixelScroller interface {
 type RegionPresenter interface {
 	PresentRegion(*image.RGBA)
 }
+
+// Graphics is implemented by backends with optional hardware presentation.
+type Graphics interface {
+	SetGPUEnabled(bool) bool
+	GPUActive() bool
+}

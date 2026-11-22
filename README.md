@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-A lightweight Go toolkit for native desktop and mobile UI. Linux, Windows, and macOS desktop builds use pure Go. Android and iOS use their native SDKs.
+A lightweight Go toolkit for native desktop, mobile, and browser UI. Linux, Windows, and macOS desktop builds use pure Go. Android and iOS use their native SDKs.
 
 Build layouts, forms, data views, and text editors with retained Go controls and light and dark themes using the [shadcn Neutral color tokens](https://ui.shadcn.com/docs/theming#default-theme-css).
 
@@ -21,6 +21,7 @@ Build layouts, forms, data views, and text editors with retained Go controls and
 | macOS | Cocoa | amd64, arm64 |
 | Android | Native activity | arm64, amd64 |
 | iOS | UIKit | arm64 |
+| Browser | Canvas | WebAssembly |
 
 Linux requires X11 or XWayland at runtime; when `libXext` and a local server provide MIT-SHM, window updates use shared memory and otherwise fall back to regular uploads. CJK text needs system fonts with the appropriate glyphs; Noto Sans CJK is recommended on Linux. Windows and macOS use system fonts. An embedded Go font is used when no suitable system Latin font is available.
 
@@ -88,6 +89,20 @@ go run ./examples/gallery -dark
 go run ./examples/gallery -snapshot gallery.png
 ```
 
+## Run in a browser
+
+Build the same Go controls as WebAssembly and serve them over HTTP.
+
+```sh
+mkdir -p /tmp/fego-web
+cp examples/web/index.html examples/web/main.js /tmp/fego-web/
+cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" /tmp/fego-web/
+GOOS=js GOARCH=wasm go build -o /tmp/fego-web/app.wasm ./examples/studio
+python3 -m http.server 8080 --directory /tmp/fego-web
+```
+
+Open `http://localhost:8080`. The app mounts into the element with ID `fego`. Give that element a height and add `data-fego-fill` to have windows follow its dimensions. Serve `wasm_exec.js` from the same Go toolchain used to build the app. The demo accepts `?dark` for the dark theme and `?video=sample.webm` if you place that file next to `app.wasm`.
+
 ## System tray and multiple windows
 
 Run `go run ./examples/tray` inside a desktop session with tray support. The example starts in the tray, opens a window from its menu and keeps running after that window closes. Choose **Quit** from the tray to exit.
@@ -106,11 +121,11 @@ Create trays and update their menus on the UI thread. From worker goroutines, us
 | Basic widgets | Text, RichText, Button, PrimaryButton, Checkbox, Radio, Switch, Separator, Image |
 | Forms | TextInput, TextArea, password fields, Field, Form, Select, ComboBox, Autocomplete, SearchField, MultiSelect, TokenField, InputGroup, InputOTP, NumberInput, Stepper, DecimalInput, TimeInput, ColorPicker, Slider, RangeSlider, Rating, Progress |
 | Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Sidebar, CommandPalette, Pagination, Menu, Dropdown, SplitButton, Dialog, Drawer, Toast, Badge, Avatar |
-| Data | List, VirtualList, Table with column sorting, Tree with expand/collapse, LineChart, BarChart |
-| Dates and documents | Calendar, DatePicker, CodeEditor with line numbers, common Markdown syntax |
-| Drawing | Canvas; Painter rectangles, rounded rectangles, circles, lines, text, and images; Theme, Bounds |
+| Data | List, VirtualList, Table with column sorting, Tree with expand/collapse, LineChart, BarChart, AreaChart, StackedBarChart, PieChart |
+| Dates and documents | Calendar, DatePicker, CodeEditor, Editor, MarkdownEditor, Diff, Merge |
+| Drawing and media | Canvas, Painter, Path, EaseInOut, Spring, Keyframes, Timeline, Video, optional GPU presentation and GLSL shaders |
 | Input | Mouse, scrolling, Tab and arrow keys, Unicode, selection, clipboard, undo, system input method text commits |
-| Accessibility | Linux AT-SPI, Windows MSAA, macOS NSAccessibility |
+| Accessibility | Linux AT-SPI, Windows MSAA, macOS NSAccessibility, browser ARIA |
 
 ## Updating state and layout
 
@@ -139,6 +154,16 @@ list.Fill()
 
 The list mounts visible rows and a small buffer around them. Keep durable state in your data model. Use `Key` for stable selection through reordering, `Headers` for pinned sections, and `Reorder` to apply a drag to your data. Shift extends selection and Ctrl or Command toggles rows in multi-select mode. Use `Refresh` to rebuild rows after editing their data.
 
+## Documents, drawing, and video
+
+Run `go run ./examples/studio` for an editor, a three-way merge, animated drawing, charts, and the GPU switch. Use `go run ./examples/studio -video path/to/file.webm` to open the video tab. Desktop playback reads a local file through FFmpeg on PATH and plays the video track. Browser playback uses the browser decoder and supports audio, with a same-origin or CORS-enabled media URL. Call `Play` during a button or other user gesture on the web. Video playback is available on desktop and in the browser.
+
+Use `ui.Editor` for find and replace, fold ranges, and multiple carets. Alt-click adds a caret. Use the gutter chevron to collapse or expand an indented block. Use `ui.MarkdownEditor` to preview changes. `ui.Diff` displays a side-by-side comparison. `ui.Merge` applies independent changes and lets users choose a resolution for each overlap. Its `Text` method reports whether all conflicts are resolved.
+
+Use `ui.Path` with `FillPath` or `StrokePath` in a canvas. Charts use the shadcn Neutral palette and show values on hover or with keyboard selection. `ui.Animate` and `ui.Timeline` run on the UI thread and schedule frames while tracks are active.
+
+GPU presentation defaults to off. Set `WindowOptions.GPU` at creation or call `window.SetGPUEnabled(true)` on the UI thread to enable it. Linux, Windows, and macOS use OpenGL, and the browser uses WebGL 2. `window.GPUActive()` reports whether initialization succeeded. CPU presentation resumes when the hardware path is unavailable. Controls and paths are rasterized in Go. Applications can apply a full-frame GLSL effect with `window.SetFragmentShader` using `frameTexture` and `frameUV`. The mobile platforms use the system compositor.
+
 ## Text and accessibility
 
 CJK text relies on system fonts for the required glyphs. Text editing offsets use Unicode runes. Full grapheme-cluster editing, complex text shaping, BiDi, and color emoji are not yet supported.
@@ -147,7 +172,7 @@ Password fields disable copying and cutting, and accessibility interfaces expose
 
 ## Limitations
 
-- Rendering uses the CPU. GPU custom shaders, 3D, video, and a native Wayland backend are not yet supported.
+- Linux windows use X11 or XWayland. The canvas supports two-dimensional drawing.
 - `CodeEditor` provides text editing and line numbers, without LSP or rich-text WYSIWYG editing.
 - Markdown supports common syntax but does not implement all of CommonMark. HTML is displayed as plain text. Links notify the application through a callback and accept only http, https, and mailto.
 

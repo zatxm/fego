@@ -35,7 +35,8 @@ func (v *view) scrollRows(e *Element, next float32) {
 		v.moveLayout(e.children[0], inner.Y-next, e.clip.intersect(inner))
 	}
 	v.invalidate(e, e.scrollable && !localLayout)
-	opaque := e.rowCount() > 0 && v.theme.Surface.A == 255
+	editor := e.kind == kEditor && v.focused != e && v.theme.Raised.A == 255
+	opaque := (e.rowCount() > 0 || editor) && v.theme.Surface.A == 255
 	if localLayout {
 		if v.scrollCheck != e {
 			v.scrollCheck = e
@@ -58,6 +59,11 @@ func (v *view) scrollRows(e *Element, next float32) {
 	r.Max.Y -= margin
 	r.Min.Y = max(r.Min.Y, int(math.Ceil(float64((e.rect.Y+e.headerHeight())*v.scale)))+margin)
 	r.Max.X = min(r.Max.X, int(math.Floor(float64((e.rect.X+e.rect.W-9)*v.scale))))
+	if editor {
+		inner := v.inputInner(e)
+		scrolling := Rect{e.rect.X + 4, inner.Y, inner.W + 48, inner.H}
+		r = r.Intersect(scrolling.pixels(v.scale))
+	}
 	r = r.Intersect(e.clip.pixels(v.scale)).Intersect(v.size)
 	if r.Empty() || math.Abs(float64(delta)) >= float64(r.Dy()) || delta == 0 {
 		return

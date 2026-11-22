@@ -143,6 +143,7 @@ type Element struct {
 
 // widget holds state used by controls but not by plain boxes and labels.
 type widget struct {
+	editor                                     *editorState
 	placeholder                                string
 	primary, checked, multiline, password, tab bool
 	value, minimum, maximum                    float64
@@ -159,6 +160,9 @@ type widget struct {
 	spans                                      []Span
 	bitmap                                     image.Image
 	draw                                       func(*Painter)
+	onPoint                                    func(float32, float32)
+	onHover                                    func(float32, float32)
+	onNavigate                                 func(string)
 	onChange                                   func(string)
 	onToggle                                   func(bool)
 	onValue                                    func(float64)
@@ -449,13 +453,19 @@ func (e *Element) SetText(s string) *Element {
 			layout = layout || before != after
 		}
 		e.text = s
+		if e.editor != nil {
+			e.editor.stale = true
+			e.editor.extra, e.editor.folds = nil, nil
+		}
 		if e.kind == kInput || e.kind == kEditor {
 			n := utf8.RuneCountInString(s)
 			e.own().cursor = min(e.cursor, n)
 			e.own().anchor = min(e.anchor, n)
 			e.own().undo = nil
 			e.own().undoBytes = 0
-			e.scroll = min(e.scroll, e.maxScroll())
+			if e.scroll > 0 {
+				e.scroll = min(e.scroll, e.maxScroll())
+			}
 			e.own().scrollX = 0
 		}
 		e.touch(layout)
@@ -480,11 +490,40 @@ func (e *Element) SetValue(v float64) *Element {
 		v = min(e.interval.high, v)
 	}
 	if e.value != v {
+		previous := e.value
 		e.own().value = v
-		e.touch(false)
+		if e.view != nil && (e.kind == kProgress || e.kind == kSlider && e.interval == nil) {
+			e.damageValue(previous)
+		} else {
+			e.touch(false)
+		}
 	}
 	return e
 }
+
+// Only the moving thumb and the changed end of the filled track need painting.
+func (e *Element) damageValue(previous float64) {
+	v, r := e.view, e.rect
+	if v.size.Empty() || v.needsLayout || r.W <= 16 || v.scale < 1 {
+		e.touch(false)
+		return
+	}
+	from, to := r.X+float32(previous)*r.W, r.X+float32(e.value)*r.W
+	margin := r.H/2 + 2
+	if e.kind == kSlider {
+		from = r.X + 8 + sliderFraction(e, previous)*(r.W-16)
+		to = r.X + 8 + sliderFraction(e, e.value)*(r.W-16)
+		margin = 10
+	} else if min(from, to)-r.X < r.H {
+		// The radius of a short fill also changes its left cap.
+		from, to = r.X, max(from, to)
+	}
+	start, end := min(from, to)-margin, max(from, to)+margin
+	v.scrolling = nil
+	v.damage(Rect{start, r.Y, end - start, r.H}.pixels(v.scale))
+	v.host.Invalidate()
+}
+
 func (e *Element) Value() float64 { return e.value }
 func (e *Element) SetSelected(i int) *Element {
 	if e.kind == kSelect && (i < -1 || i >= len(e.options)) {
