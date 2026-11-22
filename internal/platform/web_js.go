@@ -61,24 +61,29 @@ type webListener struct {
 }
 
 type webWindow struct {
-	backend                    *webBackend
-	send                       func(Event)
-	root, canvas, input, ctx   js.Value
-	listeners                  []webListener
-	pixels, data               js.Value
-	dataWidth, dataHeight      int
-	width, height              int
-	scale                      float64
-	clipboard                  string
-	resizeObserver             js.Value
-	resizeCallback             js.Func
-	accessRoot                 js.Value
-	accessNodes                map[uint64]webAccessNode
-	dragOrigin, dragLast       [2]float32
-	dragScrolling              bool
-	composing, closed, editing bool
-	gpu                        *webGL
-	gpuRequested               bool
+	backend                     *webBackend
+	send                        func(Event)
+	root, canvas, input, ctx    js.Value
+	listeners                   []webListener
+	pixels, data                js.Value
+	dataWidth, dataHeight       int
+	width, height               int
+	scale                       float64
+	clipboard                   string
+	resizeObserver              js.Value
+	resizeCallback              js.Func
+	accessRoot                  js.Value
+	accessNodes                 map[uint64]webAccessNode
+	accessGeneration            uint64
+	inputLabel                  string
+	caretCSS                    image.Point
+	inputPassword, inputNumeric bool
+	inputHintsKnown             bool
+	dragOrigin, dragLast        [2]float32
+	dragScrolling               bool
+	composing, closed, editing  bool
+	gpu                         *webGL
+	gpuRequested                bool
 }
 
 func (b *webBackend) Open(o Options, send func(Event)) (Window, error) {
@@ -435,8 +440,13 @@ func (w *webWindow) SetClipboard(value string) {
 }
 func (w *webWindow) TextInput(active bool, caret image.Rectangle) {
 	if active {
-		w.input.Get("style").Set("left", strconv.Itoa(int(float64(caret.Min.X)/w.scale))+"px")
-		w.input.Get("style").Set("top", strconv.Itoa(int(float64(caret.Min.Y)/w.scale))+"px")
+		css := image.Pt(int(float64(caret.Min.X)/w.scale), int(float64(caret.Min.Y)/w.scale))
+		if css != w.caretCSS || !w.editing {
+			style := w.input.Get("style")
+			style.Set("left", strconv.Itoa(css.X)+"px")
+			style.Set("top", strconv.Itoa(css.Y)+"px")
+			w.caretCSS = css
+		}
 		if !w.editing {
 			w.focus(w.input)
 		}
@@ -446,20 +456,23 @@ func (w *webWindow) TextInput(active bool, caret image.Rectangle) {
 	w.editing = active
 }
 func (w *webWindow) SetTextInputState(_ string, _, _ int, password, numeric bool) {
-	mode := "text"
-	if numeric {
-		mode = "numeric"
-	}
-	if w.input.Call("getAttribute", "inputmode").String() != mode {
+	if !w.inputHintsKnown || w.inputNumeric != numeric {
+		mode := "text"
+		if numeric {
+			mode = "numeric"
+		}
 		w.input.Call("setAttribute", "inputmode", mode)
+		w.inputNumeric = numeric
 	}
-	correction := "on"
-	if password {
-		correction = "off"
-	}
-	if w.input.Call("getAttribute", "autocorrect").String() != correction {
+	if !w.inputHintsKnown || w.inputPassword != password {
+		correction := "on"
+		if password {
+			correction = "off"
+		}
 		w.input.Call("setAttribute", "autocorrect", correction)
+		w.inputPassword = password
 	}
+	w.inputHintsKnown = true
 }
 
 func (w *webWindow) Close() {

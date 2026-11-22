@@ -722,14 +722,17 @@ func (v *view) updateCaret() {
 		v.host.TextInput(false, image.Rectangle{})
 		return
 	}
-	x, y := v.caretPosition(e, v.inputInner(e))
 	inner := v.inputInner(e)
+	x, y := v.caretPosition(e, inner)
+	previous := e.scrollX
 	if x > inner.X+inner.W-2 {
 		e.own().scrollX += x - (inner.X + inner.W - 2)
 	} else if x < inner.X {
 		e.own().scrollX = max(0, e.scrollX-(inner.X-x))
 	}
-	x, y = v.caretPosition(e, inner)
+	if e.scrollX != previous {
+		x, y = v.caretPosition(e, inner)
+	}
 	r := Rect{x, y, 2, v.text.LineHeight(v.font(e), false)}
 	v.host.TextInput(true, r.pixels(v.scale))
 	if h, ok := v.host.(interface {
@@ -738,13 +741,30 @@ func (v *view) updateCaret() {
 		h.SetTextInputState(e.text, e.anchor, e.cursor, e.password, e.otpLength > 0)
 	}
 }
-func (e *Element) remember() {
-	e.own().undo = append(e.undo, e.text)
-	e.own().undoBytes += len(e.text)
-	for len(e.undo) > 64 || e.undoBytes > 4<<20 {
-		e.own().undoBytes -= len(e.undo[0])
-		e.own().undo[0] = ""
-		e.own().undo = e.undo[1:]
+
+type textUndo struct {
+	removed         string
+	start, inserted int
+}
+
+func (e *Element) remember(start, end, inserted int) {
+	const maxUndoBytes = 4 << 20
+	state := e.own()
+	if end-start > maxUndoBytes {
+		state.undo, state.undoBytes = nil, 0
+		return
+	}
+	removed := e.text[start:end]
+	if start != 0 || end != len(e.text) {
+		// A substring must not keep the old document's backing string alive.
+		removed = strings.Clone(removed)
+	}
+	state.undoBytes += len(removed)
+	state.undo = append(state.undo, textUndo{removed, start, inserted})
+	for len(state.undo) > 64 || state.undoBytes > maxUndoBytes {
+		state.undoBytes -= len(state.undo[0].removed)
+		state.undo[0] = textUndo{}
+		state.undo = state.undo[1:]
 	}
 }
 
@@ -779,7 +799,7 @@ func (v *view) replaceSelection(e *Element, text string) {
 	} else {
 		start, end = runeByteOffset(e.text, a), runeByteOffset(e.text, b)
 	}
-	e.remember()
+	e.remember(start, end, len(text))
 	if state != nil {
 		state.splice(e.text, a, b, start, end, text, newRunes)
 	}
@@ -856,13 +876,14 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 			return
 		case "z":
 			if len(e.undo) > 0 {
-				e.text = e.undo[len(e.undo)-1]
+				last := e.undo[len(e.undo)-1]
+				e.text = e.text[:last.start] + last.removed + e.text[last.start+last.inserted:]
 				e.markEditorEdit()
 				if e.editor != nil {
 					e.editor.extra, e.editor.folds = nil, nil
 				}
-				e.own().undoBytes -= len(e.text)
-				e.own().undo[len(e.undo)-1] = ""
+				e.own().undoBytes -= len(last.removed)
+				e.undo[len(e.undo)-1] = textUndo{}
 				e.own().undo = e.undo[:len(e.undo)-1]
 				e.own().cursor = utf8.RuneCountInString(e.text)
 				e.own().anchor = e.cursor

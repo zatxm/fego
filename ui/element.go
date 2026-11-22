@@ -170,7 +170,7 @@ type widget struct {
 	onLink                                     func(string)
 	scrollX                                    float32
 	cursor, anchor                             int
-	undo                                       []string
+	undo                                       []textUndo
 	undoBytes                                  int
 	virtual                                    *VirtualListView
 	interval                                   *RangeSliderView
@@ -447,7 +447,7 @@ func (e *Element) SetText(s string) *Element {
 	if e.text != s {
 		variable := e.kind == kText || e.kind == kButton || e.kind == kCheck || e.kind == kSwitch || e.kind == kRadio
 		layout := variable && e.style.w == 0
-		if variable && e.style.h == 0 && e.view != nil {
+		if variable && !layout && e.style.h == 0 && e.view != nil {
 			_, before := e.view.text.Measure(e.text, e.view.font(e), e.style.bold)
 			_, after := e.view.text.Measure(s, e.view.font(e), e.style.bold)
 			layout = layout || before != after

@@ -171,13 +171,15 @@ func TestScrollInvalidationAndOverlayFallBack(t *testing.T) {
 		h.Step()
 	}
 	before := h.copies
-	v.input(fego.Event{Kind: fego.Scroll, X: 40, Y: 65, DY: 8})
-	v.input(fego.Event{Kind: fego.Scroll, X: 40, Y: 65, DY: 8})
-	h.Step()
-	checkScrollPixels(t, h)
-	if h.copies != before {
-		t.Fatal("unpresented pixels copied on a second queued scroll")
+	h.uploaded = 0
+	for range 4 {
+		v.input(fego.Event{Kind: fego.Scroll, X: 40, Y: 65, DY: 8})
 	}
+	h.Step()
+	if h.copies != before+1 || h.uploaded >= h.Width*h.Height/5 {
+		t.Fatalf("queued scroll copied %d times and uploaded %d pixels", h.copies-before, h.uploaded)
+	}
+	checkScrollPixels(t, h)
 }
 
 func TestScrollUploadsOnlyExposedPixels(t *testing.T) {
@@ -300,8 +302,12 @@ func TestScrollViewCopiesMatchFullLayout(t *testing.T) {
 					}
 					h.Step()
 					checkScrollPixels(t, h)
-					if h.copies != before {
-						t.Fatal("queued viewport scroll reused stale pixels")
+					expected := before
+					if native && (kind == "root" || kind == "nested-opaque") {
+						expected++
+					}
+					if h.copies != expected {
+						t.Fatalf("queued viewport copy count %d, want %d", h.copies, expected)
 					}
 					scroller.Children()
 					h.Step()

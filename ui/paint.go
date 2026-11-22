@@ -92,6 +92,10 @@ func (p *Painter) pixel(x, y int, c Color) {
 	p.solid = image.Rectangle{}
 	i := p.dst.PixOffset(x, y)
 	d := p.dst.Pix[i : i+4 : i+4]
+	if c.A == 255 {
+		d[0], d[1], d[2], d[3] = c.R, c.G, c.B, 255
+		return
+	}
 	a := uint32(c.A)
 	inv := 255 - a
 	d[0] = uint8((uint32(c.R)*a + uint32(d[0])*inv + 127) / 255)
@@ -192,16 +196,24 @@ func (p *Painter) Line(x1, y1, x2, y2, width float32, c Color) {
 	x2 = (x2 + p.originX) * p.scale
 	y2 = (y2 + p.originY) * p.scale
 	width *= p.scale
-	if p.outsideRows(min(y1, y2)-width, max(y1, y2)+width) {
+	rad := width/2 + .5
+	if c.A == 0 || rad <= 0 {
 		return
 	}
-	r := image.Rect(int(math.Floor(float64(min(x1, x2)-width))), int(math.Floor(float64(min(y1, y2)-width))), int(math.Ceil(float64(max(x1, x2)+width))), int(math.Ceil(float64(max(y1, y2)+width)))).Intersect(p.clip).Intersect(p.dst.Rect)
+	padding := min(width, rad)
+	if p.outsideRows(min(y1, y2)-padding, max(y1, y2)+padding) {
+		return
+	}
+	r := image.Rect(int(math.Floor(float64(min(x1, x2)-padding))), int(math.Floor(float64(min(y1, y2)-padding))),
+		int(math.Ceil(float64(max(x1, x2)+padding))), int(math.Ceil(float64(max(y1, y2)+padding)))).Intersect(p.clip).Intersect(p.dst.Rect)
+	if r.Empty() {
+		return
+	}
 	dx, dy := x2-x1, y2-y1
 	if math.Abs(float64(dx)) <= 8 || math.Abs(float64(dy)) <= 8 {
 		p.linePixels(r, x1, y1, dx, dy, width, c)
 		return
 	}
-	rad := width/2 + .5
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		// A covered pixel must lie within this row's expanded segment span.
 		py := float32(y) + .5
@@ -217,19 +229,30 @@ func (p *Painter) Line(x1, y1, x2, y2, width float32, c Color) {
 func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c Color) {
 	// Explicit rounding keeps ARM64 FMA and scalar edge coverage identical.
 	length := float32(dx*dx) + float32(dy*dy)
+	radius := width/2 + .5
+	inner := max(0, radius-1)
+	inner2, outer2 := float32(inner*inner), float32(radius*radius)
 	for y := r.Min.Y; y < r.Max.Y; y++ {
+		py := float32(y) + .5
+		yProjection := float32((py - y1) * dy)
 		for x := r.Min.X; x < r.Max.X; x++ {
-			px, py := float32(x)+.5, float32(y)+.5
+			px := float32(x) + .5
 			t := float32(0)
 			if length > 0 {
-				t = max(0, min(1, (float32((px-x1)*dx)+float32((py-y1)*dy))/length))
+				t = max(0, min(1, (float32((px-x1)*dx)+yProjection)/length))
 			}
 			a, b := px-(x1+float32(t*dx)), py-(y1+float32(t*dy))
-			cov := max(float32(0), min(float32(1), width/2+.5-float32(math.Sqrt(float64(float32(a*a)+float32(b*b))))))
-			if cov > 0 {
-				cc := c
-				cc.A = uint8(float32(c.A) * cov)
-				p.pixel(x, y, cc)
+			distance := float32(a*a) + float32(b*b)
+			if distance >= outer2 {
+				continue
+			}
+			if inner > 0 && distance < inner2 {
+				p.pixel(x, y, c)
+				continue
+			}
+			alpha := uint8(float32(c.A) * max(0, min(1, radius-float32(math.Sqrt(float64(distance))))))
+			if alpha != 0 {
+				p.pixel(x, y, RGBA(c.R, c.G, c.B, alpha))
 			}
 		}
 	}

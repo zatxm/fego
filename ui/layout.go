@@ -159,16 +159,16 @@ func (v *view) layout(e *Element, r, clip Rect) {
 		cols := min(s.columns, count)
 		rows := (count + cols - 1) / cols
 		cw := max(0, (inner.W-float32(cols-1)*s.gap)/float32(cols))
-		var naturalH float32
-		for _, c := range e.children {
-			if !c.hidden {
-				_, ch := v.measure(c)
-				naturalH = max(naturalH, ch)
-			}
-		}
-		ch := naturalH
+		var ch float32
 		if s.fillH {
 			ch = max(0, (inner.H-float32(rows-1)*s.gap)/float32(rows))
+		} else {
+			for _, c := range e.children {
+				if !c.hidden {
+					_, height := v.measure(c)
+					ch = max(ch, height)
+				}
+			}
 		}
 		i := 0
 		for _, c := range e.children {
@@ -190,15 +190,15 @@ func (v *view) layout(e *Element, r, clip Rect) {
 		if c.hidden {
 			continue
 		}
-		cw, ch := v.measure(c)
-		cm := ch
-		if horizontal {
-			cm = cw
-		}
 		if weight := c.growth(horizontal); weight > 0 {
 			grow += weight
 		} else {
-			used += cm
+			cw, ch := v.measure(c)
+			if horizontal {
+				used += cw
+			} else {
+				used += ch
+			}
 		}
 	}
 	free := max(0, main-used)
@@ -220,19 +220,20 @@ func (v *view) layout(e *Element, r, clip Rect) {
 			c.rect = Rect{}
 			continue
 		}
-		cw, ch := v.measure(c)
-		cm, cc := ch, cw
-		if horizontal {
-			cm, cc = cw, ch
+		weight := c.growth(horizontal)
+		fillCross := s.align == Stretch || (!horizontal && c.style.fillW) || (horizontal && c.style.fillH)
+		var cm, cc float32
+		if weight == 0 || !fillCross {
+			cw, ch := v.measure(c)
+			cm, cc = ch, cw
+			if horizontal {
+				cm, cc = cw, ch
+			}
 		}
-		if weight := c.growth(horizontal); weight > 0 {
+		if weight > 0 {
 			cm = free * weight / grow
 		}
-		fillCross := c.style.fillW
-		if horizontal {
-			fillCross = c.style.fillH
-		}
-		if s.align == Stretch || fillCross {
+		if fillCross {
 			cc = cross
 		}
 		cc = min(cc, cross)

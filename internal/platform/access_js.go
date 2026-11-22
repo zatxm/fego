@@ -6,8 +6,9 @@ import (
 )
 
 type webAccessNode struct {
-	node  js.Value
-	state AccessNode
+	node       js.Value
+	state      AccessNode
+	generation uint64
 }
 
 func (w *webWindow) SetAccessibility(nodes []AccessNode) {
@@ -24,7 +25,7 @@ func (w *webWindow) SetAccessibility(nodes []AccessNode) {
 		})
 	}
 	document := js.Global().Get("document")
-	seen := make(map[uint64]struct{}, len(nodes))
+	w.accessGeneration++
 	var focusLabel string
 	for _, n := range nodes {
 		if n.Role == "input" && n.Focused {
@@ -33,11 +34,8 @@ func (w *webWindow) SetAccessibility(nodes []AccessNode) {
 		if n.Role == "group" && n.Label == "" {
 			continue
 		}
-		seen[n.ID] = struct{}{}
 		existing, found := w.accessNodes[n.ID]
-		if found && existing.state == n {
-			continue
-		}
+		previous := existing.state
 		node := existing.node
 		if !found {
 			tag := "div"
@@ -52,53 +50,72 @@ func (w *webWindow) SetAccessibility(nodes []AccessNode) {
 			node.Call("setAttribute", "data-fego-node", strconv.FormatUint(n.ID, 10))
 			w.accessRoot.Call("appendChild", node)
 		}
-		role := n.Role
-		switch role {
-		case "input":
-			role = "textbox"
-		case "image":
-			role = "img"
-		case "progress":
-			role = "progressbar"
-		case "row", "treeitem":
-			role = "button"
-		case "text":
-			role = ""
+		if !found || previous.Role != n.Role {
+			role := n.Role
+			switch role {
+			case "input":
+				role = "textbox"
+			case "image":
+				role = "img"
+			case "progress":
+				role = "progressbar"
+			case "row", "treeitem":
+				role = "button"
+			case "text":
+				role = ""
+			}
+			if role != "" {
+				node.Call("setAttribute", "role", role)
+			}
 		}
-		if role != "" {
-			node.Call("setAttribute", "role", role)
-		}
-		if n.Label != "" {
-			node.Call("setAttribute", "aria-label", n.Label)
+		if !found || n.Label != previous.Label {
+			if n.Label != "" {
+				node.Call("setAttribute", "aria-label", n.Label)
+			} else if found {
+				node.Call("removeAttribute", "aria-label")
+			}
 		}
 		if n.Role == "input" {
-			node.Set("readOnly", true)
-			if !found || n.Value != existing.state.Value {
+			if !found {
+				node.Set("readOnly", true)
+			}
+			if !found || n.Value != previous.Value {
 				node.Set("value", n.Value)
 			}
-		} else if !found || n.Label != existing.state.Label {
+		} else if !found || n.Label != previous.Label {
 			node.Set("textContent", n.Label)
 		}
-		if n.Disabled {
-			node.Call("setAttribute", "aria-disabled", "true")
-		} else {
-			node.Call("removeAttribute", "aria-disabled")
+		if !found || n.Disabled != previous.Disabled {
+			if n.Disabled {
+				node.Call("setAttribute", "aria-disabled", "true")
+			} else if found {
+				node.Call("removeAttribute", "aria-disabled")
+			}
 		}
 		switch n.Role {
 		case "checkbox", "radio", "switch":
-			node.Call("setAttribute", "aria-checked", strconv.FormatBool(n.Checked))
+			if !found || n.Checked != previous.Checked {
+				node.Call("setAttribute", "aria-checked", strconv.FormatBool(n.Checked))
+			}
 		case "slider", "progress":
-			node.Call("setAttribute", "aria-valuemin", strconv.FormatFloat(n.Min, 'g', -1, 64))
-			node.Call("setAttribute", "aria-valuemax", strconv.FormatFloat(n.Max, 'g', -1, 64))
-			node.Call("setAttribute", "aria-valuenow", strconv.FormatFloat(n.Number, 'g', -1, 64))
+			if !found || n.Min != previous.Min {
+				node.Call("setAttribute", "aria-valuemin", strconv.FormatFloat(n.Min, 'g', -1, 64))
+			}
+			if !found || n.Max != previous.Max {
+				node.Call("setAttribute", "aria-valuemax", strconv.FormatFloat(n.Max, 'g', -1, 64))
+			}
+			if !found || n.Number != previous.Number {
+				node.Call("setAttribute", "aria-valuenow", strconv.FormatFloat(n.Number, 'g', -1, 64))
+			}
 		}
-		w.accessNodes[n.ID] = webAccessNode{node, n}
+		w.accessNodes[n.ID] = webAccessNode{node, n, w.accessGeneration}
 	}
-	if focusLabel != "" {
+	if focusLabel != "" && focusLabel != w.inputLabel {
 		w.input.Call("setAttribute", "aria-label", focusLabel)
+		w.inputLabel = focusLabel
 	}
 	for id, existing := range w.accessNodes {
-		if _, ok := seen[id]; !ok {
+		if existing.generation != w.accessGeneration {
 			existing.node.Call("remove")
 			delete(w.accessNodes, id)
 		}

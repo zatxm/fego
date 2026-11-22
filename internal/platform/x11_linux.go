@@ -295,6 +295,7 @@ type xWindow struct {
 	originKnown                            bool
 	width, height                          int
 	focused, textInput, closed, configured bool
+	preeditSpot                            xPoint
 	title                                  string
 	access                                 *atspiBridge
 	accessTried                            bool
@@ -1044,21 +1045,28 @@ func (w *xWindow) TextInput(enabled bool, caret image.Rectangle) {
 	if w.closed {
 		return
 	}
+	changed := w.textInput != enabled
 	w.textInput = enabled
 	if w.ic == 0 {
 		return
 	}
-	if enabled && w.focused {
-		xl.setICFocus(w.ic)
-	} else {
-		xl.unsetICFocus(w.ic)
+	if changed {
+		if enabled && w.focused {
+			xl.setICFocus(w.ic)
+		} else {
+			xl.unsetICFocus(w.ic)
+		}
 	}
 	if enabled {
-		p := xPoint{int16(min(max(caret.Min.X, 0), 32767)), int16(min(max(caret.Max.Y, 0), 32767))}
-		attrs := xl.nestedList(0, "spotLocation", &p, 0)
+		spot := xPoint{int16(min(max(caret.Min.X, 0), 32767)), int16(min(max(caret.Max.Y, 0), 32767))}
+		if !changed && w.preeditSpot == spot {
+			return
+		}
+		attrs := xl.nestedList(0, "spotLocation", &spot, 0)
 		if attrs != nil {
 			xl.setICValues(w.ic, "preeditAttributes", attrs, 0)
 			xl.free(attrs)
+			w.preeditSpot = spot
 		}
 	}
 }

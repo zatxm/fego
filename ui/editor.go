@@ -181,8 +181,9 @@ func (x *SourceEditor) ReplaceAll(query, replacement string) int {
 		return 0
 	}
 	state := e.sourceIndex()
-	e.remember()
-	e.text = strings.ReplaceAll(e.text, query, replacement)
+	next := strings.ReplaceAll(e.text, query, replacement)
+	e.remember(0, len(e.text), len(next))
+	e.text = next
 	e.markEditorEdit()
 	state.extra = nil
 	if strings.Contains(query, "\n") || strings.Contains(replacement, "\n") {
@@ -519,7 +520,8 @@ func (v *view) editCarets(e *Element, text, key string) bool {
 		}
 	}
 	out.WriteString(e.text[prev:])
-	e.remember()
+	start, end := state.byteAt(e.text, normal[0].Anchor), state.byteAt(e.text, normal[len(normal)-1].Caret)
+	e.remember(start, end, end-start+out.Len()-len(e.text))
 	e.text = out.String()
 	e.markEditorEdit()
 	state.folds = state.folds[:0]

@@ -6,6 +6,7 @@ import (
 )
 
 type pixelScroll struct {
+	element    *Element
 	rect, full image.Rectangle
 	dy         int
 }
@@ -23,7 +24,9 @@ func (v *view) scrollRows(e *Element, next float32) {
 	if old == next {
 		return
 	}
-	clean := !v.needsLayout && len(v.dirty) == 0 && !v.size.Empty()
+	previous := v.scrolling
+	coalescing := previous != nil && previous.element == e
+	clean := !v.needsLayout && (len(v.dirty) == 0 || coalescing) && !v.size.Empty()
 	e.scroll = next
 	localLayout := clean && e.scrollable && len(e.children) == 1 && !e.children[0].hidden
 	exactShift := true
@@ -65,6 +68,12 @@ func (v *view) scrollRows(e *Element, next float32) {
 		r = r.Intersect(scrolling.pixels(v.scale))
 	}
 	r = r.Intersect(e.clip.pixels(v.scale)).Intersect(v.size)
+	if coalescing {
+		if r != previous.rect {
+			return
+		}
+		delta += float32(previous.dy)
+	}
 	if r.Empty() || math.Abs(float64(delta)) >= float64(r.Dy()) || delta == 0 {
 		return
 	}
@@ -75,7 +84,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 			}
 		}
 	}
-	v.scrollState = pixelScroll{rect: r, full: v.dirty[0], dy: int(delta)}
+	v.scrollState = pixelScroll{element: e, rect: r, full: v.dirty[0], dy: int(delta)}
 	v.scrolling = &v.scrollState
 }
 

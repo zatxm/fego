@@ -45,6 +45,45 @@ func TestSourceEditorMultipleCaretsAndFold(t *testing.T) {
 	host.Key("End", false, false)
 }
 
+func TestLargeEditorUndoKeepsOnlyChangedText(t *testing.T) {
+	source := strings.Repeat("one two three four 中文\n", 18000)
+	editor := Editor(source)
+	host := NewTester(editor.Element.Fill(), 520, 360)
+	defer host.Close()
+	r := editor.Input.Bounds()
+	host.Click(r.X+64, r.Y+18)
+	editor.SetSelections(Selection{2, 3})
+	host.Type("🙂")
+	if editor.Input.undoBytes != len("e") {
+		t.Fatal("local edit retained more than the removed bytes")
+	}
+	for range 16 {
+		editor.SetSelections(Selection{1, 1})
+		host.Type("x")
+	}
+	if got := len(editor.Input.undo); got != 17 {
+		t.Fatalf("undo steps = %d, want 17", got)
+	}
+	for range 17 {
+		host.Key("z", false, true)
+	}
+	if editor.Text() != source {
+		t.Fatal("undo did not restore the source")
+	}
+
+	editor.SetSelections(Selection{1, 2}, Selection{6, 7})
+	host.Type("界")
+	host.Key("z", false, true)
+	if editor.Text() != source {
+		t.Fatal("undo did not restore a multi-caret edit")
+	}
+	editor.ReplaceAll("one", "一")
+	host.Key("z", false, true)
+	if editor.Text() != source {
+		t.Fatal("undo did not restore ReplaceAll")
+	}
+}
+
 func TestSourceIndexSpliceMatchesRebuild(t *testing.T) {
 	for _, old := range []string{"", "abc", "\n", "aβ\ncd\n⁕が\n", "😀α\n\n中", strings.Repeat("α\nβ\n", 9)} {
 		for _, insert := range []string{"", "e", "\n", "か\n😀\n"} {
