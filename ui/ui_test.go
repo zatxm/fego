@@ -3,7 +3,10 @@ package ui
 import (
 	"bytes"
 	"image"
+	"image/color"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	"github.com/zatxm/fego/v26"
 )
@@ -166,6 +169,80 @@ func TestPopupAndDialogFocus(t *testing.T) {
 	if view.Document.live.dialog != nil {
 		t.Fatal("escape did not dismiss")
 	}
+}
+
+func TestSwitchPalette(t *testing.T) {
+	for _, theme := range []struct {
+		palette Theme
+		off     color.RGBA
+		thumb   color.RGBA
+		onThumb color.RGBA
+	}{
+		{Light, color.RGBA{229, 229, 229, 255}, color.RGBA{255, 255, 255, 255}, color.RGBA{255, 255, 255, 255}},
+		{Dark, color.RGBA{39, 39, 39, 255}, color.RGBA{250, 250, 250, 255}, color.RGBA{23, 23, 23, 255}},
+	} {
+		control := Switch("", false)
+		view := NewDocumentTester(View(Column(control).Padding(10)).Theme(theme.palette), 120, 80)
+		r := switchTrack(control.Bounds())
+		x, y := int(r.X), int(r.Y+r.H/2)
+		before := view.Snapshot()
+		if before.RGBAAt(x+9, y) != theme.thumb || before.RGBAAt(x+23, y) != theme.off {
+			t.Fatalf("off switch track and thumb do not match theme: %v %v", before.RGBAAt(x+23, y), before.RGBAAt(x+9, y))
+		}
+		clickElement(view, control)
+		after := view.Snapshot()
+		accent := theme.palette.Accent
+		if after.RGBAAt(x+9, y) != (color.RGBA{accent.R, accent.G, accent.B, accent.A}) ||
+			after.RGBAAt(x+23, y) != theme.onThumb {
+			t.Fatal("on switch track and thumb do not match theme")
+		}
+		control.SetChecked(false).Disabled(true)
+		disabled := view.Snapshot()
+		if int(disabled.RGBAAt(x+9, y).R)-int(disabled.RGBAAt(x+23, y).R) < 10 {
+			t.Fatal("disabled switch thumb blends into its track")
+		}
+		view.Close()
+	}
+}
+
+func TestDialogShadeFadesAndSurvivesReplacement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		trigger := Button("Open", nil)
+		doc := View(Column(trigger))
+		tester := &Tester{Document: doc, Width: 300, Height: 200, Scale: 1}
+		host := &delayedHost{Tester: tester}
+		v := doc.Mount(host).(*view)
+		v.frame(false)
+		defer tester.Close()
+		clickElement(tester, trigger)
+		start := tester.Snapshot().RGBAAt(10, 100).R
+		doc.ShowDialog(Card(Text("First")).Width(160))
+		if tester.Snapshot().RGBAAt(10, 100).R != start || host.pending == nil {
+			t.Fatal("dialog backdrop did not start transparent")
+		}
+		time.Sleep(dialogFadeDuration / 2)
+		host.pending()
+		mid := tester.Snapshot().RGBAAt(10, 100).R
+		if mid >= start || mid <= start/2 {
+			t.Fatal("missing intermediate backdrop frame", mid)
+		}
+		doc.ShowDialog(Card(Text("Next")).Width(160))
+		if got := tester.Snapshot().RGBAAt(10, 100).R; got != mid {
+			t.Fatal("replacing the dialog reset its backdrop", got, mid)
+		}
+		time.Sleep(dialogFadeDuration / 2)
+		host.pending()
+		dim := tester.Snapshot().RGBAAt(10, 100).R
+		doc.CloseDialog()
+		if v.focused != trigger || tester.Snapshot().RGBAAt(10, 100).R != dim {
+			t.Fatal("closing dialog did not restore focus and retain the backdrop for its exit")
+		}
+		time.Sleep(dialogFadeDuration)
+		host.pending()
+		if got := tester.Snapshot().RGBAAt(10, 100).R; got != start {
+			t.Fatal("backdrop did not clear after the exit transition", got)
+		}
+	})
 }
 
 func TestPainterClipAndAlpha(t *testing.T) {

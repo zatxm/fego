@@ -61,7 +61,7 @@ func (v *view) measure(e *Element) (w, h float32) {
 		h = max(28, h)
 	case kSwitch:
 		w, h = v.text.Measure(e.text, font, s.bold)
-		w += 54
+		w += switchTrackWidth + 10
 		h = max(30, h)
 	case kInput, kEditor:
 		w = 220

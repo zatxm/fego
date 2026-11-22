@@ -401,8 +401,12 @@ func TestFocusRingDoesNotTintButtonContents(t *testing.T) {
 			view.Width, view.Height, view.Scale = int(220*scale), int(90*scale), scale
 			view.Document.live.frame(true)
 			before := view.Snapshot()
-			view.Document.live.focus(button)
-			view.Step()
+			x, y := int((button.rect.X-2)*scale), int((button.rect.Y+button.rect.H/2)*scale)
+			clickElement(view, button)
+			if view.Document.live.focused != button || before.RGBAAt(x, y) != view.img.RGBAAt(x, y) {
+				t.Fatal("pointer focus should not draw a ring")
+			}
+			view.Key("Tab", false, false)
 			inner := button.rect.pixels(scale).Inset(int(math.Ceil(float64(5 * scale))))
 			for y := inner.Min.Y; y < inner.Max.Y; y++ {
 				a, b := before.PixOffset(inner.Min.X, y), before.PixOffset(inner.Max.X, y)
@@ -410,7 +414,6 @@ func TestFocusRingDoesNotTintButtonContents(t *testing.T) {
 					t.Fatal("focus tinted button contents")
 				}
 			}
-			x, y := int((button.rect.X-2)*scale), int((button.rect.Y+button.rect.H/2)*scale)
 			if before.RGBAAt(x, y) == view.img.RGBAAt(x, y) {
 				t.Fatal("focus ring is missing")
 			}

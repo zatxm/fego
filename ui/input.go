@@ -106,6 +106,11 @@ func (v *view) input(ev fego.Event) {
 		// Acting on the element replaces the hint until the pointer moves on.
 		v.dismissTip()
 	}
+	if ev.Kind == fego.PointerDown && ev.Button == 1 {
+		v.setFocusVisible(false)
+	} else if ev.Kind == fego.KeyDown {
+		v.setFocusVisible(true)
+	}
 	if v.popup != nil && v.popupInput(ev, x, y) {
 		return
 	}
@@ -375,6 +380,15 @@ func (v *view) focus(e *Element) {
 		}
 	}
 	v.updateCaret()
+}
+
+func (v *view) setFocusVisible(visible bool) {
+	if v.focusVisible != visible {
+		v.focusVisible = visible
+		if v.focused != nil {
+			v.invalidate(v.focused, false)
+		}
+	}
 }
 
 func (v *view) available(e *Element) bool {

@@ -48,7 +48,7 @@ func (d *Document) Mount(host fego.Host) fego.View {
 	if d.live != nil || d.root.view != nil || d.root.parent != nil {
 		panic("ui: a Document belongs to one window")
 	}
-	v := &view{doc: d, root: d.root, host: host, theme: d.theme, text: fonttext.New(), needsLayout: true}
+	v := &view{doc: d, root: d.root, host: host, theme: d.theme, text: fonttext.New(), needsLayout: true, focusVisible: true}
 	if r, ok := host.(regionHost); ok && r.RetainsPixels() {
 		v.region = r
 	}
@@ -92,11 +92,14 @@ type view struct {
 	dirty                   []image.Rectangle
 	needsLayout             bool
 	hover, pressed, focused *Element
+	focusVisible            bool
 	scrollDrag              *Element
 	scrollGrab              float32
 	pointerX, pointerY      float32
 	popup                   *popup
 	dialog                  *Element
+	dialogShade             uint8
+	dialogFade              func()
 	drawer                  bool
 	returnFocus             *Element
 	toast                   string
@@ -121,6 +124,10 @@ func (v *view) ResetPresenter() {
 
 func (v *view) Close() {
 	v.dismissTip()
+	if v.dialogFade != nil {
+		v.dialogFade()
+		v.dialogFade = nil
+	}
 	v.rowLabels = nil
 	v.img = nil
 	v.bandMu.Lock()
@@ -321,8 +328,8 @@ func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
 	p := &Painter{dst: dst, clip: d, scale: scale, text: v.text, theme: v.theme}
 	p.fillPixels(d, v.theme.Background)
 	v.paint(p, v.root, false)
+	p.fillPixels(d, RGBA(0, 0, 0, v.dialogShade))
 	if v.dialog != nil {
-		p.fillPixels(v.size, RGBA(0, 0, 0, 128))
 		v.paint(p, v.dialog, false)
 	}
 	if v.popup != nil {
@@ -356,18 +363,21 @@ func (d *Document) showDialog(content *Element, drawer bool) {
 	if content.parent != nil || content.view != nil {
 		panic("ui: dialog must be detached")
 	}
-	if v.dialog != nil {
+	opening := v.dialog == nil
+	if opening {
+		v.returnFocus = v.focused
+		v.forget(v.root)
+	} else {
 		v.forget(v.dialog)
 		v.dialog.attach(nil)
 	}
-	if v.dialog == nil {
-		v.returnFocus = v.focused
-	}
-	v.forget(v.root)
 	v.dialog = content
 	v.drawer = drawer
 	content.attach(v)
 	v.focused = nil
+	if opening {
+		v.fadeDialogShade(128)
+	}
 	v.invalidate(v.root, true)
 }
 func (d *Document) CloseDialog() {
@@ -383,7 +393,36 @@ func (d *Document) CloseDialog() {
 		v.focus(e)
 	}
 	v.returnFocus = nil
-	v.invalidate(v.root, true)
+	v.invalidate(v.root, false)
+	v.fadeDialogShade(0)
+}
+
+const dialogFadeDuration = 150 * time.Millisecond
+
+func (v *view) fadeDialogShade(target uint8) {
+	if v.dialogFade != nil {
+		v.dialogFade()
+		v.dialogFade = nil
+	}
+	apply := func(shade uint8) {
+		v.dialogShade = shade
+		v.scrolling = nil
+		v.damage(v.size)
+		v.host.Invalidate()
+	}
+	clock, animated := v.host.(animationClock)
+	start := v.dialogShade
+	// Paint the new modal state even when the previous transition never drew.
+	if !animated || start == target {
+		apply(target)
+		return
+	}
+	v.dialogFade = Animate(clock, dialogFadeDuration, EaseInOut, func(progress float64) {
+		shade := uint8(math.Round(float64(start) + float64(int(target)-int(start))*progress))
+		if shade != v.dialogShade || progress == 1 {
+			apply(shade)
+		}
+	})
 }
 func (d *Document) ShowToast(message string) {
 	if d.live != nil {

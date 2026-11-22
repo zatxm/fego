@@ -198,6 +198,7 @@ func (v *view) accessAction(ev fego.Event) {
 			e.interval.activeHigh = target.row == 1
 		}
 		if e.interactive() {
+			v.setFocusVisible(true)
 			v.focus(e)
 		}
 	case "press":

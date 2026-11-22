@@ -372,7 +372,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	if !disabled && v.hover == e && e.onHover == nil {
 		border = mix(border, t.Ring, .45)
 	}
-	if v.focused == e {
+	if v.focused == e && (v.focusVisible || e.kind == kInput || e.kind == kEditor) {
 		border = t.Ring
 	}
 	if s.card {
@@ -558,20 +558,27 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		cx, cy := r.X+10, r.Y+r.H/2
 		textX := r.X + 30
 		if e.kind == kSwitch {
-			b := border
+			track, thumb := t.InputBorder, t.Background
+			bounds := switchTrack(r)
+			knob := bounds.X + 9
+			dark := 299*int(t.Background.R)+587*int(t.Background.G)+114*int(t.Background.B) < 128000
 			if e.checked {
-				b = primary
+				track = t.Accent
+				knob = bounds.X + bounds.W - 9
+				if dark {
+					thumb = t.AccentText
+				}
+			} else if dark {
+				track.A = uint8(uint16(track.A) * 4 / 5)
+				thumb = t.Text
 			}
-			p.RoundRect(Rect{r.X, cy - 11, 40, 22}, 11, b)
-			if !e.checked {
-				p.RoundRect(Rect{r.X + 1, cy - 10, 38, 20}, 10, t.Raised)
+			if disabled {
+				track.A /= 2
+				thumb = mix(t.Background, thumb, .5)
 			}
-			knob := r.X + 11
-			if e.checked {
-				knob = r.X + 29
-			}
-			p.Circle(knob, cy, 8, t.AccentText)
-			textX = r.X + 52
+			p.RoundRect(bounds, bounds.H/2, track)
+			p.Circle(knob, cy, 8, thumb)
+			textX = r.X + switchTrackWidth + 10
 		} else if e.kind == kRadio {
 			if e.checked {
 				border = primary
@@ -652,14 +659,25 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	}
 }
 
+const switchTrackWidth = 32
+
+func switchTrack(r Rect) Rect {
+	return Rect{r.X, r.Y + r.H/2 - 9, switchTrackWidth, 18}
+}
+
 func (v *view) paintFocus(p *Painter, e *Element) {
-	if v.focused == e {
+	if v.focused == e && v.focusVisible {
 		t := v.theme
 		r := e.rect
+		radius := e.style.radius
+		if e.kind == kSwitch {
+			r = switchTrack(r)
+			radius = r.H / 2
+		}
 		if e.otpLength > 0 {
 			r.W = e.otpSlot(e.otpLength-1).X - r.X + e.otpSlot(0).W
 		}
-		p.RoundRect(Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}, e.style.radius+3, RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128))
+		p.RoundRect(Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}, radius+3, RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128))
 	}
 }
 
