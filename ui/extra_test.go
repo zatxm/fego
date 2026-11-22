@@ -18,7 +18,7 @@ func TestCalendarLeapMonthAndKeyboard(t *testing.T) {
 	count := 0
 	var leap *Element
 	for i, day := range calendar.days {
-		if !day.hidden {
+		if day.style.button != outsideDayButton {
 			count++
 		}
 		if calendar.dates[i].Day() == 29 && !day.hidden {
@@ -48,7 +48,7 @@ func TestCalendarLeapMonthAndKeyboard(t *testing.T) {
 	tester.Step()
 	count = 0
 	for _, day := range calendar.days {
-		if !day.hidden {
+		if day.style.button != outsideDayButton {
 			count++
 		}
 	}
@@ -65,7 +65,8 @@ func TestDatePickerInvalidEditAndChoosingCurrentDate(t *testing.T) {
 	picker := DatePicker(date)
 	changed := 0
 	picker.OnChange(func(time.Time) { changed++ })
-	tester := NewTester(Column(picker.Element).Padding(10), 380, 500)
+	below := Button("Below", nil)
+	tester := NewTester(Column(picker.Element, below).Padding(10), 380, 500)
 	defer tester.Close()
 	clickElement(tester, picker.Input)
 	tester.Key("a", false, true)
@@ -73,7 +74,16 @@ func TestDatePickerInvalidEditAndChoosingCurrentDate(t *testing.T) {
 	if picker.Valid() || !sameDate(picker.Date(), date) || changed != 0 {
 		t.Fatalf("invalid edit committed: %v %v", picker.Valid(), picker.Date())
 	}
+	rest := below.rect
 	toggle := picker.children[0].children[1]
+	clickElement(tester, toggle)
+	if below.rect != rest || picker.Calendar.hidden {
+		t.Fatal("opening the popover shifted the surrounding form")
+	}
+	tester.Key("Escape", false, false)
+	if !picker.Calendar.hidden || tester.Document.live.focused != toggle {
+		t.Fatal("Escape did not dismiss the popover and restore focus")
+	}
 	clickElement(tester, toggle)
 	var current *Element
 	for i, day := range picker.Calendar.days {
@@ -188,7 +198,7 @@ func TestComboBoxFiltersAcceptsKeyboardAndFreeText(t *testing.T) {
 	defer tester.Close()
 	clickElement(tester, combo.Input)
 	tester.Type("AP")
-	if len(combo.matches) != 2 || combo.matches[0] != "Apple" || combo.Choices.hidden {
+	if len(combo.matches) != 2 || combo.option(0) != "Apple" || combo.Choices.hidden {
 		t.Fatalf("matches=%v", combo.matches)
 	}
 	// The suggestions are ordinary retained list controls in the tab sequence.
@@ -220,6 +230,19 @@ func TestComboBoxFiltersAcceptsKeyboardAndFreeText(t *testing.T) {
 	}
 	if len(changes) != 4 {
 		t.Fatalf("change callbacks=%v", changes)
+	}
+	combo.filter("ap")
+	combo.filter("APPL")
+	if combo.Choices.count != 1 || combo.option(0) != "Apple" {
+		t.Fatal("appended query did not narrow the prior matches")
+	}
+	combo.filter("a")
+	if combo.Choices.count != 3 {
+		t.Fatal("deleting the query did not restore excluded options")
+	}
+	combo.filter("中文")
+	if combo.Choices.count != 1 || combo.option(0) != "中文" {
+		t.Fatal("replacing the query reused unrelated matches")
 	}
 }
 

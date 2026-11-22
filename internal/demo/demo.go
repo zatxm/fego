@@ -65,7 +65,10 @@ func Build() *ui.Document {
 		}
 	}).FillWidth()
 	activity := ui.Card(ui.Row(ui.Text("团队活跃度").FontSize(16).Bold().Grow(1), ui.Text("过去 12 周").FontSize(12).Muted()), chart).Gap(8)
-	projectCard := ui.Card(ui.Row(ui.Text("最近项目").FontSize(16).Bold().Grow(1), ui.Menu("更多", ui.MenuItem{Label: "刷新列表", Action: func() { table.Refresh(); notify("项目列表已更新") }}, ui.MenuItem{Label: "复制工作空间名称", Action: func() { notify("在设置中可以修改工作空间名称") }})), table).Padding(16).Gap(12)
+	projectCard := ui.Card(ui.Row(ui.Text("最近项目").FontSize(16).Bold().Grow(1), ui.DropdownMenu("更多",
+		ui.MenuEntry{Icon: "↻", MenuItem: ui.MenuItem{Label: "刷新列表", Action: func() { table.Refresh(); notify("项目列表已更新") }}},
+		ui.MenuEntry{Icon: "▤", SeparatorBefore: true, MenuItem: ui.MenuItem{Label: "工作空间名称", Action: func() { notify("在设置中可以修改工作空间名称") }}},
+	)), table).Padding(16).Gap(12)
 	metric := func(title, value, detail string) *ui.Element {
 		return ui.Card(ui.Text(title).FontSize(12).Muted(), ui.Row(ui.Text(value).FontSize(28).Bold().Grow(1), ui.Text("↗").FontSize(24).Muted()), ui.Text(detail).FontSize(11).Muted()).Grow(1).Gap(8).Padding(18)
 	}
@@ -90,7 +93,7 @@ func Build() *ui.Document {
 		).Padding(3, 10).MinHeight(36)
 	})
 	members.Label("项目列表").Height(194)
-	commandRow := ui.Row()
+	commandRow := ui.Row().Gap(6)
 	advanced := ui.Card(
 		ui.Text("表单与筛选").FontSize(17).Bold(),
 		ui.Field("验证码", ui.InputOTP(4, func(string) { notify("验证码已输入") }), ""),
@@ -124,16 +127,33 @@ func Build() *ui.Document {
 		p.Rect(ui.Rect{X: 8, Y: 11, W: 4, H: 13}, theme.AccentText)
 		p.Rect(ui.Rect{X: 12, Y: 14, W: 8, H: 4}, theme.AccentText)
 	})
-	nav := func(label string, index int) *ui.Element {
-		return ui.Button(label, func() { tabs.SetSelected(index) }).FillWidth().Height(42)
-	}
-	sidebar := ui.Column(ui.Row(logo, ui.Text("fego").FontSize(25).Bold()).Gap(10), ui.Text("WORKSPACE").FontSize(10).Bold().Muted(), nav("工作概览", 0), nav("组件与交互", 1), nav("代码与文档", 2), ui.Box().Grow(1), ui.Separator(), ui.Switch("深色外观", false).OnToggle(func(dark bool) {
-		if dark {
-			doc.Theme(ui.Dark)
-		} else {
-			doc.Theme(ui.Light)
+	nav := make([]*ui.Element, 3)
+	selectPage := func(page int) {
+		tabs.SetSelected(page)
+		for i, item := range nav {
+			item.SetActive(i == page)
 		}
-	}), ui.Text("属于你的，轻量工作空间").FontSize(11).Muted()).Width(198).FillHeight().Radius(0).Padding(22, 18).Gap(18)
+	}
+	for i, label := range []string{"工作概览", "组件与交互", "代码与文档"} {
+		icon := [...]string{"▤", "▦", "‹›"}[i]
+		nav[i] = ui.SidebarItem(icon+"   "+label, func() { selectPage(i) }).Label(label)
+	}
+	nav[0].SetActive(true)
+	tabs.OnSelect(selectPage)
+	sidebar := ui.Column(
+		ui.Row(logo, ui.Text("fego").FontSize(24).Bold()).Gap(10).Padding(0, 8),
+		ui.Column(ui.Text("WORKSPACE").FontSize(12).Muted().Padding(0, 8), ui.Column(nav...).Gap(4)).Gap(8),
+		ui.Box().Grow(1),
+		ui.Separator(),
+		ui.Switch("深色外观", false).OnToggle(func(dark bool) {
+			if dark {
+				doc.Theme(ui.Dark)
+			} else {
+				doc.Theme(ui.Light)
+			}
+		}),
+	).FillHeight().Padding(16, 8).Gap(16)
+
 	newProject := func() {
 		field := ui.TextInput("").Placeholder("给项目起个名字")
 		doc.ShowDialog(ui.Dialog("创建新项目", ui.Field("项目名称", field, "随时可以在项目设置中修改。"), ui.Button("取消", func() { doc.CloseDialog() }), ui.PrimaryButton("创建项目", func() {
@@ -147,17 +167,29 @@ func Build() *ui.Document {
 			notify("已创建项目：" + field.Text())
 		})).Width(430))
 	}
-	header := ui.Row(ui.Column(ui.Text("工作空间 / 团队概览").FontSize(11).Muted(), ui.Text("把注意力，留给重要的事。").FontSize(26).Bold()).Gap(8).Grow(1), ui.PrimaryButton("+  新建项目", newProject)).Gap(18)
+	var layout *ui.Element
+	sidebarOpen := true
+	sidebarToggle := ui.Button("▥", func() {
+		sidebarOpen = !sidebarOpen
+		layout.SetSidebarOpen(sidebarOpen)
+	}).Size(34, 34).Label("切换侧栏").Tooltip("切换侧栏")
+	header := ui.Row(sidebarToggle, ui.Column(ui.Text("工作空间 / 团队概览").FontSize(11).Muted(), ui.Text("把注意力，留给重要的事。").FontSize(26).Bold()).Gap(8).Grow(1), ui.PrimaryButton("+  新建项目", newProject)).Gap(18)
 	body := ui.Column(header, tabs.Element, ui.Row(ui.Canvas(8, 8, func(p *ui.Painter) { p.Circle(4, 4, 3, p.Theme().Chart[1]) }), status).Gap(7).Height(18)).Padding(26).Gap(22).Fill()
-	doc = ui.View(ui.Sidebar(sidebar, body).Fill())
+	layout = ui.Sidebar(sidebar, body).Fill()
+	doc = ui.View(layout)
 	commandRow.Append(ui.CommandPalette(doc, "搜索命令",
 		ui.Command{Label: "新建项目", Keywords: "new project", Action: newProject},
-		ui.Command{Label: "切换到编辑器", Keywords: "code editor", Action: func() { tabs.SetSelected(2) }},
-	))
+		ui.Command{Label: "切换到编辑器", Keywords: "code editor", Action: func() { selectPage(2) }},
+	).Width(82))
 	commandRow.Append(ui.Button("侧边面板", func() {
-		doc.ShowDrawer(ui.Drawer("项目筛选",
+		doc.ShowSheet(ui.Sheet("项目筛选",
 			ui.MultiSelect([]string{"进行中", "审核中", "已完成"}, []int{0}, nil),
 			ui.Button("关闭", func() { doc.CloseDialog() })))
-	}))
+	}).Width(82))
+	commandRow.Append(ui.Button("底部抽屉", func() {
+		doc.ShowDrawer(ui.Drawer("项目筛选",
+			ui.MultiSelect([]string{"进行中", "审核中", "已完成"}, []int{0}, nil),
+			ui.Button("关闭", doc.CloseDialog)))
+	}).Width(82))
 	return doc
 }

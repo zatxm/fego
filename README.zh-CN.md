@@ -120,12 +120,14 @@ python3 -m http.server 8080 --directory /tmp/fego-web
 | 布局 | Box、Row、Column、Grid、Card、ScrollView、间距、padding、尺寸和对齐 |
 | 基础控件 | Text、RichText、Button、PrimaryButton、Checkbox、Radio、Switch、Separator、Image |
 | 表单 | TextInput、TextArea、密码、Field、Form、Select、ComboBox、Autocomplete、SearchField、MultiSelect、TokenField、InputGroup、InputOTP、NumberInput、Stepper、DecimalInput、TimeInput、ColorPicker、Slider、RangeSlider、Rating、Progress |
-| 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Sidebar、CommandPalette、Pagination、Menu、Dropdown、SplitButton、Dialog、Drawer、Toast、Badge、Avatar |
+| 导航与反馈 | Tabs、Segmented、Accordion、Breadcrumbs、Sidebar、CommandPalette、Pagination、Menu、Dropdown、SplitButton、Dialog、Sheet、Drawer、Toast、Badge、Avatar |
 | 数据 | List、VirtualList、Table（列排序）、Tree（展开与折叠）、LineChart、BarChart、AreaChart、StackedBarChart、PieChart |
 | 日期与文档 | Calendar、DatePicker、CodeEditor、Editor、MarkdownEditor、Diff、Merge |
 | 绘图和媒体 | Canvas、Painter、Path、EaseInOut、Spring、Keyframes、Timeline、Video、可选 GPU 呈现和 GLSL 着色器 |
 | 输入 | 鼠标、滚轮、Tab 与方向键、Unicode、选择、剪贴板、撤销、系统输入法提交文本 |
 | 无障碍 | Linux AT-SPI、Windows MSAA、macOS NSAccessibility、浏览器 ARIA |
+
+右侧面板使用 `Sheet` 和 `Document.ShowSheet`。底部面板使用 `Drawer` 和 `Document.ShowDrawer`，可向下拖动关闭。
 
 ## 更新状态与布局
 

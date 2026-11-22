@@ -64,7 +64,7 @@ func imageReference(p *Painter, img image.Image, r Rect) {
 	}
 }
 func TestLineSpanMatchesReference(t *testing.T) {
-	for _, scale := range []float32{.75, 1, 1.5, 2} {
+	for _, scale := range []float32{.75, 1, 1.25, 1.5, 2} {
 		for i := range 90 {
 			a := image.NewRGBA(image.Rect(-3, 7, 127, 109))
 			for j := range a.Pix {
@@ -76,8 +76,17 @@ func TestLineSpanMatchesReference(t *testing.T) {
 			q := *p
 			q.dst = b
 			x1, y1, x2, y2 := float32(i*37%153-20), float32(i*19%147-20), float32(i*11%153-20), float32(i*29%147-20)
+			if i%3 == 0 {
+				x2 = x1
+			}
+			if i%7 == 0 {
+				y2 = y1
+			}
 			width := []float32{.3, 1, 2, 5.7, 12}[i%5]
 			ink := RGBA(17, 132, 231, uint8(i*37))
+			if i%2 == 0 {
+				ink.A = 255
+			}
 			p.Line(x1, y1, x2, y2, width, ink)
 			lineReference(&q, x1, y1, x2, y2, width, ink)
 			if !bytes.Equal(a.Pix, b.Pix) {
@@ -153,6 +162,57 @@ func TestChartSnapshotReuseAndShrink(t *testing.T) {
 		t.Fatal("cleared chart retains data")
 	}
 }
+func TestAreaChartReleasesLargePathsWhenDataShrinks(t *testing.T) {
+	values := make([]float64, 1000)
+	for i := range values {
+		if i%2 == 0 {
+			values[i] = float64(i)
+		} else {
+			values[i] = math.NaN()
+		}
+	}
+	chart := AreaChart(Series{Values: values}, Series{Values: values})
+	view := NewTester(chart.Element, 480, 240)
+	defer view.Close()
+	if len(chart.areaPaths[0].commands) < 1000 || len(chart.traces[0]) < 500 {
+		t.Fatal("expected large paint buffers before replacing data")
+	}
+	chart.SetSeries(Series{Values: []float64{2, 4, 3}})
+	if chart.traces[1] != nil || chart.areaPaths[1].commands != nil {
+		t.Fatal("removed series retains paint buffers before redraw")
+	}
+	view.Step()
+	if cap(chart.traces[0]) > 12 || cap(chart.areaPaths[0].commands) > 48 {
+		t.Fatal("small dataset retains oversized paint buffers")
+	}
+}
+
+func TestToggleMarkDamageMatchesFullPaint(t *testing.T) {
+	for _, theme := range []Theme{Light, Dark} {
+		for _, scale := range []float32{1, 1.25, 2} {
+			check, radio, toggle := Checkbox("Check", false), Radio("Radio", false), Switch("Switch", false)
+			h := newScrollScreen(View(Card(check, radio, toggle).Fill()).Theme(theme), scale, true)
+			v := h.Document.live
+			for _, checked := range []bool{true, false} {
+				for _, e := range []*Element{check, radio, toggle} {
+					e.SetChecked(checked)
+					if len(v.dirty) != 1 || v.dirty[0].Dx() >= e.rect.pixels(scale).Dx() {
+						t.Fatal("toggle repainted its full label")
+					}
+					h.Step()
+					checkScrollPixels(t, h)
+					for _, n := range h.nodes {
+						if n.ID == e.id && n.Checked != checked {
+							t.Fatal("accessible checked state is stale")
+						}
+					}
+				}
+			}
+			h.Close()
+		}
+	}
+}
+
 func TestCalendarPartialUpdateMatchesFullPaint(t *testing.T) {
 	date := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	calendar := Calendar(date)
@@ -388,7 +448,7 @@ func TestCanvasContextsStayLocalAndReuseStorage(t *testing.T) {
 	defer view.Close()
 	root.Refresh()
 	view.Step()
-	if n := testing.AllocsPerRun(30, func() { root.Refresh(); view.Step() }); n != 1 {
+	if n := testing.AllocsPerRun(30, func() { root.Refresh(); view.Step() }); n != 0 {
 		t.Fatalf("two canvases allocated %v drawing contexts", n)
 	}
 }

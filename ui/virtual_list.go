@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"maps"
 	"math"
 	"math/bits"
 	"slices"
@@ -130,8 +131,16 @@ func (l *VirtualListView) SelectedKeys() []int {
 	return keys
 }
 
+func (l *VirtualListView) resetSelection(count int) {
+	if count < len(l.chosen)/4 {
+		l.chosen = nil
+	} else {
+		clear(l.chosen)
+	}
+}
+
 func (l *VirtualListView) SetSelectedKeys(keys ...int) *VirtualListView {
-	clear(l.chosen)
+	l.resetSelection(len(keys))
 	if len(keys) > 0 {
 		if l.chosen == nil {
 			l.chosen = make(map[int]struct{}, len(keys))
@@ -159,16 +168,36 @@ func (l *VirtualListView) SetCount(count int, follow bool) *VirtualListView {
 	if count < l.options.Count {
 		headers := sort.SearchInts(l.options.Headers, count)
 		l.options.Headers = l.options.Headers[:headers]
-		for index := range l.heights {
-			if index >= count {
-				l.measure(index, l.options.EstimatedHeight)
+		if headers == 0 {
+			l.options.Headers = nil
+		} else if headers < cap(l.options.Headers)/4 {
+			l.options.Headers = slices.Clone(l.options.Headers)
+		}
+		if count == 0 || count < len(l.heights)/4 {
+			// Rebuild a small prefix without undoing every discarded measurement.
+			heights := l.heights
+			l.heights, l.sums = nil, nil
+			for index := range count {
+				l.setHeightDelta(index, heights[index])
+			}
+		} else {
+			for index := range l.heights {
+				if index >= count {
+					l.setHeightDelta(index, 0)
+				}
 			}
 		}
 		if l.options.Key == nil {
+			selected := len(l.chosen)
 			for key := range l.chosen {
 				if key >= count {
 					delete(l.chosen, key)
 				}
+			}
+			if len(l.chosen) == 0 {
+				l.chosen = nil
+			} else if len(l.chosen) < selected/4 {
+				l.chosen = maps.Collect(maps.All(l.chosen))
 			}
 		}
 		l.lead = min(l.lead, count-1)
@@ -239,8 +268,11 @@ func (l *VirtualListView) index(y float32) int {
 }
 
 func (l *VirtualListView) measure(i int, height float32) {
+	l.setHeightDelta(i, float64(height)-float64(l.options.EstimatedHeight))
+}
+
+func (l *VirtualListView) setHeightDelta(i int, delta float64) {
 	old := l.heights[i]
-	delta := float64(height) - float64(l.options.EstimatedHeight)
 	if old == delta {
 		return
 	}
@@ -268,7 +300,7 @@ func (l *VirtualListView) row(i int) *Element {
 	row := element(kVirtualRow).Children(body)
 	row.parent = l.Element
 	row.attach(l.view)
-	row.own().selected = i
+	row.rowIndex = int32(i)
 	if l.options.Name != nil {
 		row.label = l.options.Name(i)
 	} else if body.label != "" {
@@ -290,15 +322,22 @@ func (l *VirtualListView) detach(row *Element) {
 	row.parent = nil
 }
 
-func (l *VirtualListView) layout(v *view, r, clip Rect) {
+func (l *VirtualListView) measureRow(v *view, i int, remeasure bool) float32 {
+	row := l.row(i)
+	if remeasure || row.measuredHeight == 0 {
+		_, h := v.measure(row)
+		row.measuredHeight = max(1, h)
+		l.measure(i, row.measuredHeight)
+	}
+	return row.measuredHeight
+}
+
+func (l *VirtualListView) layout(v *view, r, clip Rect, remeasure bool) {
 	if l.endRequested {
 		l.endRequested = false
 		var total float32
 		for i := l.options.Count - 1; i >= 0 && total < r.H+2*l.options.EstimatedHeight; i-- {
-			_, h := v.measure(l.row(i))
-			h = max(1, h)
-			l.measure(i, h)
-			total += h
+			total += l.measureRow(v, i, remeasure)
 		}
 		l.scroll = l.maxScroll()
 	}
@@ -317,14 +356,12 @@ func (l *VirtualListView) layout(v *view, r, clip Rect) {
 	left := max(0, first-2)
 	anchor := float64(l.scroll) - l.top(first)
 	for i := left; i < first; i++ {
-		_, h := v.measure(l.row(i))
-		l.measure(i, max(1, h))
+		l.measureRow(v, i, remeasure)
 	}
 	l.scroll = max(0, min(float32(l.top(first)+anchor), l.maxScroll()))
 	bottom := float64(l.scroll + r.H)
 	for end < l.options.Count && (end < first+2 || l.top(end) < bottom) {
-		_, h := v.measure(l.row(end))
-		l.measure(end, max(1, h))
+		l.measureRow(v, end, remeasure)
 		end++
 	}
 	visibleEnd := end
@@ -332,15 +369,12 @@ func (l *VirtualListView) layout(v *view, r, clip Rect) {
 		l.first, l.last = l.index(l.scroll), min(l.options.Count-1, l.index(math.Nextafter32(l.scroll+r.H, 0)))
 	}
 	for ; end < min(l.options.Count, visibleEnd+2); end++ {
-		_, h := v.measure(l.row(end))
-		l.measure(end, max(1, h))
+		l.measureRow(v, end, remeasure)
 	}
 	bodyClip := clip
 	var pinnedBox Rect
 	if pinned >= 0 {
-		row := l.row(pinned)
-		_, h := v.measure(row)
-		l.measure(pinned, max(1, h))
+		h := l.measureRow(v, pinned, remeasure)
 		y := r.Y
 		if nextHeader < len(l.options.Headers) {
 			y = min(y, r.Y+float32(l.top(l.options.Headers[nextHeader]))-l.scroll-h)
@@ -397,13 +431,14 @@ func (l *VirtualListView) choose(i int, extend, toggle bool) {
 	key := l.key(i)
 	switch {
 	case l.options.MultiSelect && extend && l.anchor >= 0:
+		first, last := min(l.anchor, i), max(l.anchor, i)
 		if !toggle {
-			clear(l.chosen)
+			l.resetSelection(last - first + 1)
 		}
 		if l.chosen == nil {
 			l.chosen = make(map[int]struct{})
 		}
-		for j := min(l.anchor, i); j <= max(l.anchor, i); j++ {
+		for j := first; j <= last; j++ {
 			if !l.header(j) {
 				l.chosen[l.key(j)] = struct{}{}
 			}

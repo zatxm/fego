@@ -2,6 +2,7 @@ package ui
 
 import (
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -19,7 +20,8 @@ type TabView struct {
 
 func Tabs(tabs ...Tab) *TabView {
 	t := &TabView{Element: Column()}
-	bar := Row().Gap(4)
+	bar := Row().Gap(0).Padding(3).Height(36).Radius(10)
+	bar.style.tone = subtleSurface
 	for i, tab := range tabs {
 		i := i
 		button := Button(tab.Title, func() {
@@ -30,12 +32,14 @@ func Tabs(tabs ...Tab) *TabView {
 				}
 			}
 		})
-		button.own().tab = true
+		button.style.button = tabButton
+		button.Height(30).Radius(8)
 		t.buttons = append(t.buttons, button)
 		t.pages = append(t.pages, tab.Content)
 		bar.Append(button)
 	}
-	t.Children(append([]*Element{bar, Separator()}, t.pages...)...)
+	t.Children(append([]*Element{Row(bar)}, t.pages...)...)
+	wireButtonNavigation(t.buttons)
 	if len(tabs) > 0 {
 		t.SetSelected(0)
 	}
@@ -49,7 +53,7 @@ func (t *TabView) SetSelected(index int) *TabView {
 	t.own().selected = index
 	for i, page := range t.pages {
 		page.Hidden(i != index)
-		t.buttons[i].own().primary = i == index
+		t.buttons[i].primary = i == index
 		t.buttons[i].touch(false)
 	}
 	return t
@@ -64,7 +68,9 @@ type Segments struct {
 }
 
 func Segmented(options []string, selected int) *Segments {
-	s := &Segments{Element: Row().Gap(3).Padding(3)}
+	bar := Row().Gap(0).Padding(1).Radius(8)
+	bar.style.tone = segmentSurface
+	s := &Segments{Element: Row(bar).Gap(0)}
 	for i, label := range options {
 		i := i
 		button := Button(label, func() {
@@ -74,11 +80,15 @@ func Segmented(options []string, selected int) *Segments {
 					s.onSelect(i)
 				}
 			}
-		}).Radius(6)
-		button.own().tab = true
+		}).Radius(0)
+		button.style.button = segmentButton
+		if i == 0 || i == len(options)-1 {
+			button.Radius(6)
+		}
 		s.buttons = append(s.buttons, button)
 	}
-	s.Children(s.buttons...)
+	bar.Children(s.buttons...)
+	wireButtonNavigation(s.buttons)
 	if len(options) > 0 {
 		s.SetSelected(selected)
 	}
@@ -91,13 +101,39 @@ func (s *Segments) SetSelected(index int) *Segments {
 	}
 	s.own().selected = index
 	for i, button := range s.buttons {
-		button.own().primary = i == index
+		button.primary = i == index
 		button.touch(false)
 	}
 	return s
 }
 
 func (s *Segments) OnSelect(fn func(int)) *Segments { s.own().onSelect = fn; return s }
+
+func wireButtonNavigation(buttons []*Element) {
+	for i, button := range buttons {
+		button.own().onNavigate = func(key string) {
+			n := len(buttons)
+			var index int
+			switch key {
+			case "ArrowLeft":
+				index = (i + n - 1) % n
+			case "ArrowRight":
+				index = (i + 1) % n
+			case "Home":
+				index = 0
+			case "End":
+				index = n - 1
+			default:
+				return
+			}
+			next := buttons[index]
+			if v := button.view; v != nil && v.available(next) {
+				v.focus(next)
+				next.onClick()
+			}
+		}
+	}
+}
 
 type Section struct {
 	Title   string
@@ -107,20 +143,22 @@ type Section struct {
 
 // Accordion sections expand independently and keep their child controls alive.
 func Accordion(sections ...Section) *Element {
-	root := Column().Gap(10)
-	for _, section := range sections {
+	root := Column().Gap(0)
+	for i, section := range sections {
 		content := section.Content.Hidden(!section.Open)
-		header := Button("", nil)
-		update := func() {
-			prefix := "−  "
-			if content.hidden {
-				prefix = "+  "
-			}
-			header.SetText(prefix + section.Title)
+		header := Button(section.Title, nil).Height(48)
+		header.style.button, header.style.icon = accordionButton, chevronDown
+		header.primary = section.Open
+		header.OnClick(func() {
+			content.Hidden(!content.hidden)
+			header.primary = !content.hidden
+			header.touch(false)
+		})
+		item := Column(header, content).Gap(0)
+		if i < len(sections)-1 {
+			item.Append(Separator())
 		}
-		header.OnClick(func() { content.Hidden(!content.hidden); update() })
-		update()
-		root.Append(Column(header, content).Gap(10))
+		root.Append(item)
 	}
 	return root
 }
@@ -146,12 +184,16 @@ func Breadcrumbs(items ...Breadcrumb) *Element {
 	row := Row().Gap(8)
 	for i, item := range items {
 		if i > 0 {
-			row.Append(Text("›"))
+			row.Append(Canvas(14, 14, func(p *Painter) {
+				p.icon(chevronRight, 7, 7, p.theme.Muted)
+			}).Label("Separator"))
 		}
 		if item.Action != nil {
-			row.Append(Button(item.Label, item.Action).Height(32))
+			link := Button(item.Label, item.Action).Height(28)
+			link.style.button = linkButton
+			row.Append(link)
 		} else {
-			row.Append(Text(item.Label).Bold())
+			row.Append(Text(item.Label))
 		}
 	}
 	return row
@@ -163,41 +205,64 @@ type MenuItem struct {
 	Disabled bool
 }
 
+// MenuEntry adds optional presentation to a menu action.
+type MenuEntry struct {
+	MenuItem
+	Icon, Shortcut  string
+	SeparatorBefore bool
+}
+
 func Menu(label string, items ...MenuItem) *Element {
-	items = append([]MenuItem(nil), items...)
-	labels := make([]string, len(items))
+	return menuButton(label, menuEntries(items), false)
+}
+
+func Dropdown(label string, items ...MenuItem) *Element {
+	return menuButton(label, menuEntries(items), true)
+}
+
+// DropdownMenu renders a menu with optional icons, dividers and shortcut labels.
+func DropdownMenu(label string, entries ...MenuEntry) *Element {
+	return menuButton(label, slices.Clone(entries), true)
+}
+
+func menuEntries(items []MenuItem) []MenuEntry {
+	entries := make([]MenuEntry, len(items))
 	for i, item := range items {
-		labels[i] = item.Label
-		if item.Disabled {
-			labels[i] += " (disabled)"
-		}
+		entries[i].MenuItem = item
 	}
+	return entries
+}
+
+func menuButton(label string, entries []MenuEntry, dropdown bool) *Element {
 	button := Button(label, nil)
+	if dropdown {
+		button.style.icon = chevronDown
+	}
 	button.OnClick(func() {
 		if button.view != nil {
-			button.view.openPopup(button, labels, 0, func(index int) {
-				item := items[index]
-				if !item.Disabled && item.Action != nil {
-					item.Action()
-				}
-			})
+			button.view.openPopup(button, entries)
 		}
 	})
 	return button
 }
 
-func Dropdown(label string, items ...MenuItem) *Element {
-	return Menu(label+" ▾", items...)
-}
-
 // Dialog makes the detached panel passed to Document.ShowDialog. The document
 // owns modal focus and Escape handling; action buttons close it explicitly.
 func Dialog(title string, content *Element, actions ...*Element) *Element {
-	children := []*Element{Text(title).FontSize(22).Bold(), content}
+	close := iconButton(closeIcon, "Close", nil).Size(24, 24)
+	close.OnClick(func() {
+		if close.view != nil {
+			close.view.doc.CloseDialog()
+		}
+	})
+	header := Row(Text(title).FontSize(18).Bold().Grow(1), close).AlignItems(Start)
+	children := []*Element{header, content}
 	if len(actions) > 0 {
 		children = append(children, Row(actions...).Justify(End))
 	}
-	return Card(children...).Width(440).Padding(24).Gap(18).Radius(18)
+	panel := Card(children...).Width(512).Padding(24).Gap(16).Radius(10)
+	panel.style.tone = dialogSurface
+	return panel
 }
 
 // Markdown renders headings, lists, fenced code, bold text, inline code and

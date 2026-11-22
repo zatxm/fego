@@ -11,6 +11,7 @@ type tooltip struct {
 	shown  bool
 	rect   Rect
 	x, y   float32
+	above  bool
 	cancel func()
 }
 
@@ -88,12 +89,13 @@ func (v *view) showTip(t *Element) {
 	if v.text == nil || v.size.Empty() {
 		return
 	}
-	size := v.theme.FontSize - 1
+	size := v.theme.FontSize - 2
 	tw, th := v.text.Measure(t.tooltip, size, false)
-	w, h := tw+20, th+12
+	w, h := tw+24, th+12
 	width, height := float32(v.size.Dx())/v.scale, float32(v.size.Dy())/v.scale
-	x, y := v.tip.x+4, v.tip.y+22
-	if y+h > height-4 {
+	x, y := v.tip.x-w/2, v.tip.y+16
+	v.tip.above = y+h > height-10
+	if v.tip.above {
 		// Flip above the pointer near the bottom edge.
 		y = v.tip.y - h - 8
 	}
@@ -111,7 +113,7 @@ func (v *view) hideTip() {
 
 func (v *view) damageTip() {
 	v.scrolling = nil
-	v.damage(v.tip.rect.pixels(v.scale).Inset(-2))
+	v.damage(v.tip.rect.pixels(v.scale).Inset(-int(8*v.scale + 1)))
 	v.host.Invalidate()
 }
 
@@ -121,5 +123,14 @@ func (v *view) paintTip(p *Painter) {
 	}
 	r := v.tip.rect
 	p.RoundRect(r, 6, v.theme.Text)
-	p.Label(v.tip.target.tooltip, r.X+10, r.Y+6, v.theme.FontSize-1, v.theme.Surface, false)
+	x := max(r.X+8, min(v.tip.x, r.X+r.W-8))
+	y, direction := r.Y, float32(-1)
+	if v.tip.above {
+		y, direction = r.Y+r.H, 1
+	}
+	for i := range 5 {
+		half := float32(5 - i)
+		p.Rect(Rect{x - half, y + direction*float32(i), half * 2, 1}, v.theme.Text)
+	}
+	p.Label(v.tip.target.tooltip, r.X+12, r.Y+6, v.theme.FontSize-2, v.theme.Background, false)
 }

@@ -19,7 +19,6 @@ type Painter struct {
 	theme            Theme
 	originX, originY float32
 	bounds           Rect
-	canvas           *Painter
 	// solid is the latest opaque fill with nothing drawn over it since, so text
 	// on it can copy pre-blended glyphs.
 	solid      image.Rectangle
@@ -35,7 +34,19 @@ func (p *Painter) fillPixels(r image.Rectangle, c Color) {
 	if r.Empty() || c.A == 0 {
 		return
 	}
+	if c.A < 255 && r.In(p.solid) {
+		// Every covered pixel has the same destination. Blend the color once.
+		a := uint32(c.A)
+		inv := 255 - a
+		base := p.solidColor
+		c = RGB(uint8((uint32(c.R)*a+uint32(base.R)*inv+127)/255),
+			uint8((uint32(c.G)*a+uint32(base.G)*inv+127)/255),
+			uint8((uint32(c.B)*a+uint32(base.B)*inv+127)/255))
+	}
 	if c.A == 255 {
+		if c == p.solidColor && r.In(p.solid) {
+			return
+		}
 		p.solid, p.solidColor = r, c
 		row := p.dst.Pix[p.dst.PixOffset(r.Min.X, r.Min.Y):p.dst.PixOffset(r.Max.X, r.Min.Y)]
 		row[0], row[1], row[2], row[3] = c.R, c.G, c.B, 255
@@ -91,7 +102,10 @@ func (p *Painter) outsideRows(lo, hi float32) bool {
 func (p *Painter) pixel(x, y int, c Color) {
 	p.solid = image.Rectangle{}
 	i := p.dst.PixOffset(x, y)
-	d := p.dst.Pix[i : i+4 : i+4]
+	blendPixel(p.dst.Pix[i:i+4:i+4], c)
+}
+
+func blendPixel(d []byte, c Color) {
 	if c.A == 255 {
 		d[0], d[1], d[2], d[3] = c.R, c.G, c.B, 255
 		return
@@ -232,27 +246,38 @@ func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c
 	radius := width/2 + .5
 	inner := max(0, radius-1)
 	inner2, outer2 := float32(inner*inner), float32(radius*radius)
+	p.solid = image.Rectangle{}
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		py := float32(y) + .5
 		yProjection := float32((py - y1) * dy)
-		for x := r.Min.X; x < r.Max.X; x++ {
-			px := float32(x) + .5
+		row := p.dst.Pix[p.dst.PixOffset(r.Min.X, y):p.dst.PixOffset(r.Max.X, y)]
+		for i := 0; i+3 < len(row); i += 4 {
+			px := float32(r.Min.X+i/4) + .5
+			projection := float32((px-x1)*dx) + yProjection
 			t := float32(0)
-			if length > 0 {
-				t = max(0, min(1, (float32((px-x1)*dx)+yProjection)/length))
+			if length > 0 && projection > 0 {
+				t = 1
+				if projection < length {
+					t = projection / length
+				}
 			}
 			a, b := px-(x1+float32(t*dx)), py-(y1+float32(t*dy))
 			distance := float32(a*a) + float32(b*b)
-			if distance >= outer2 {
+			if !(distance < outer2) {
 				continue
 			}
-			if inner > 0 && distance < inner2 {
-				p.pixel(x, y, c)
-				continue
+			shade := c
+			if distance >= inner2 {
+				coverage := radius - float32(math.Sqrt(float64(distance)))
+				if !(coverage > 0) {
+					continue
+				}
+				if coverage < 1 {
+					shade.A = uint8(float32(c.A) * coverage)
+				}
 			}
-			alpha := uint8(float32(c.A) * max(0, min(1, radius-float32(math.Sqrt(float64(distance))))))
-			if alpha != 0 {
-				p.pixel(x, y, RGBA(c.R, c.G, c.B, alpha))
+			if shade.A != 0 {
+				blendPixel(row[i:i+4:i+4], shade)
 			}
 		}
 	}
@@ -371,22 +396,32 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		bg = t.Raised
 	case primarySurface:
 		bg = primary
+	case subtleSurface:
+		bg = t.Raised
+	case groupSurface, segmentSurface:
+		bg = fieldSurface(t, e)
+	case commandSurface:
+		bg = t.Surface
+	case sheetSurface, drawerSurface, dialogSurface:
+		bg = t.Background
 	}
 	if s.fgSet {
 		fg = s.fg
 	}
 	if disabled {
-		fg = mix(fg, t.Surface, .55)
+		if e.kind != kButton || e.pagination != 0 {
+			fg = mix(fg, t.Surface, .55)
+		}
 		primary = mix(primary, t.Surface, .55)
 	}
 	if s.bgSet {
 		bg = s.bg
-	} else if s.card && s.tone != sidebarSurface {
+	} else if s.card && s.tone != dialogSurface {
 		bg = t.Surface
 	}
 	border := t.Border
 	if e.kind == kInput || e.kind == kEditor || e.kind == kSelect ||
-		(e.kind == kButton && !e.primary && !e.tab) || e.kind == kCheck || e.kind == kRadio || e.kind == kSwitch {
+		(e.kind == kButton && e.style.button == outlinedButton && !e.primary) || s.tone == groupSurface || e.kind == kCheck || e.kind == kRadio || e.kind == kSwitch {
 		border = t.InputBorder
 	}
 	if s.borderSet && s.border.A != 0 {
@@ -409,7 +444,12 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	}
 	// A transparent border color removes the border instead of filling the
 	// element with the theme border under a translucent background.
-	if s.card && !s.borderSet || s.borderSet && s.border.A != 0 {
+	if s.tone == groupSurface && v.focusVisible && v.focused != nil && v.focused.parent == e {
+		border = t.Ring
+	}
+	if s.tone == groupSurface || s.tone == segmentSurface {
+		p.frame(r, s.radius, border, bg)
+	} else if s.card && !s.borderSet || s.borderSet && s.border.A != 0 {
 		inner := Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}
 		// A damaged area inside the opaque center cannot contain border pixels.
 		// Skip painting the border underneath pixels the surface replaces.
@@ -419,8 +459,16 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			p.RoundRect(r, s.radius, border)
 			p.RoundRect(inner, max(0, s.radius-1), bg)
 		}
+	} else if s.tone == drawerSurface {
+		p.frame(Rect{r.X - 1, r.Y, r.W + 2, r.H + 16}, s.radius, t.Border, bg)
+		p.RoundRect(Rect{r.X + (r.W-100)/2, r.Y + 14, 100, 8}, 4, t.Raised)
 	} else if bg.A != 0 {
 		p.RoundRect(r, s.radius, bg)
+		if s.tone == sidebarSurface {
+			p.Rect(Rect{r.X + r.W - 1, r.Y, 1, r.H}, t.Border)
+		} else if s.tone == sheetSurface {
+			p.Rect(Rect{r.X, r.Y, 1, r.H}, t.Border)
+		}
 	}
 	label := func(text string, box Rect, color Color, bold bool, center bool) {
 		tw, th := v.text.Measure(text, font, bold)
@@ -443,8 +491,9 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 	case kBox, kVirtualRow:
 		if e.kind == kVirtualRow {
 			l := e.parent.virtual
-			_, selected := l.chosen[l.key(e.selected)]
-			if selected || v.hover == e || l.header(e.selected) {
+			index := int(e.rowIndex)
+			_, selected := l.chosen[l.key(index)]
+			if selected || v.hover == e || l.header(index) {
 				p.Rect(r, t.Raised)
 			}
 		}
@@ -473,66 +522,35 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			x += sw
 		}
 	case kButton:
-		b, c := t.Surface, fg
-		if e.primary {
-			b, c = primary, t.AccentText
+		if e.pagination != 0 {
+			v.paintPageButton(p, e, r, fg, border, disabled)
+			break
 		}
-		if e.tab {
-			b = Color{}
-			if e.primary {
-				b, c = t.Raised, t.Text
-			}
+		v.paintButton(p, e, r, fg, border, disabled)
+		if s.button == segmentButton && r.X > e.parent.rect.X+1 {
+			p.Rect(Rect{r.X, r.Y, 1, r.H}, t.InputBorder)
 		}
-		if s.bgSet {
-			b = bg
-		}
-		if disabled {
-			b, c = t.Raised, fg
-		} else if v.pressed == e {
-			if e.tab {
-				b = t.Raised
-			} else {
-				b = mix(b, t.AccentText, .22)
-			}
-		} else if v.hover == e {
-			if e.tab {
-				b = t.Raised
-			} else if e.primary {
-				b = mix(t.Surface, primary, .9)
-			} else {
-				b = t.Raised
-			}
-		}
-		outlined := !e.primary && !e.tab
-		if outlined {
-			p.RoundRect(r, s.radius, border)
-			r = Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}
-		}
-		radius := s.radius
-		if outlined {
-			radius--
-		}
-		if b.A != 0 {
-			p.RoundRect(r, max(0, radius), b)
-		}
-		label(e.text, r, c, s.bold, true)
 	case kInput, kEditor:
 		if e.otpLength > 0 {
+			inner := r
+			inner.W = e.otpSlot(e.otpLength-1).X + e.otpSlot(0).W - r.X
+			p.frame(inner, s.radius, border, fieldSurface(t, e))
 			for i := range e.otpLength {
 				slot := e.otpSlot(i)
-				p.RoundRect(slot, 6, border)
-				p.RoundRect(Rect{slot.X + 1, slot.Y + 1, slot.W - 2, slot.H - 2}, 5, t.Surface)
+				if i > 0 {
+					p.Rect(Rect{slot.X, slot.Y + 1, 1, slot.H - 2}, border)
+				}
 				if v.focused == e && i == min(e.cursor, e.otpLength-1) {
-					p.RoundRect(slot, 6, t.Ring)
-					p.RoundRect(Rect{slot.X + 2, slot.Y + 2, slot.W - 4, slot.H - 4}, 4, t.Surface)
+					p.frame(slot, 4, t.Ring, fieldSurface(t, e))
+					if i == len(e.text) {
+						p.Rect(Rect{slot.X + slot.W/2, slot.Y + (slot.H-14)/2, 1, 14}, t.Text)
+					}
 				}
 				if i >= min(e.anchor, e.cursor) && i < max(e.anchor, e.cursor) {
 					p.RoundRect(Rect{slot.X + 3, slot.Y + 3, slot.W - 6, slot.H - 6}, 4, t.Raised)
 				}
 				if i < len(e.text) {
-					label(e.text[i:i+1], slot, fg, true, true)
-				} else {
-					label("·", slot, t.Muted, false, true)
+					label(e.text[i:i+1], slot, fg, false, true)
 				}
 			}
 			break
@@ -541,9 +559,10 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		if v.focused == e {
 			bc = t.Ring
 		}
-		p.RoundRect(r, s.radius, bc)
-		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, max(0, s.radius-1), t.Surface)
-		inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
+		if e.parent == nil || e.parent.style.tone != groupSurface && e.parent.style.tone != commandSurface {
+			p.frame(r, s.radius, bc, fieldSurface(t, e))
+		}
+		inner := v.inputInner(e)
 		if e.kind == kEditor {
 			inner = v.inputInner(e)
 			p.Rect(Rect{r.X + 1, r.Y + 1, 48, r.H - 2}, t.Raised)
@@ -578,8 +597,8 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			p.Rect(Rect{x, y, 1.4, font * 1.25}, t.Accent)
 		}
 	case kCheck, kRadio, kSwitch:
-		cx, cy := r.X+10, r.Y+r.H/2
-		textX := r.X + 30
+		cx, cy := r.X+8, r.Y+r.H/2
+		textX := r.X + 24
 		if e.kind == kSwitch {
 			track, thumb := t.InputBorder, t.Background
 			bounds := switchTrack(r)
@@ -603,11 +622,8 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			p.Circle(knob, cy, 8, thumb)
 			textX = r.X + switchTrackWidth + 10
 		} else if e.kind == kRadio {
-			if e.checked {
-				border = primary
-			}
-			p.Circle(cx, cy, 9, border)
-			p.Circle(cx, cy, 7, t.Surface)
+			p.Circle(cx, cy, 8, border)
+			p.Circle(cx, cy, 7, fieldSurface(t, e))
 			if e.checked {
 				p.Circle(cx, cy, 4, primary)
 			}
@@ -616,12 +632,12 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			if e.checked {
 				b = primary
 			}
-			p.RoundRect(Rect{r.X, cy - 9, 18, 18}, 5, b)
+			p.RoundRect(Rect{r.X, cy - 8, 16, 16}, 4, b)
 			if e.checked {
-				p.Line(r.X+4, cy, r.X+8, cy+4, 1.8, t.AccentText)
-				p.Line(r.X+8, cy+4, r.X+14, cy-4, 1.8, t.AccentText)
+				p.Line(r.X+4, cy, r.X+7, cy+3, 1.8, t.AccentText)
+				p.Line(r.X+7, cy+3, r.X+12, cy-3, 1.8, t.AccentText)
 			} else {
-				p.RoundRect(Rect{r.X + 1, cy - 8, 16, 16}, 4, t.Surface)
+				p.RoundRect(Rect{r.X + 1, cy - 7, 14, 14}, 3, fieldSurface(t, e))
 			}
 		}
 		label(e.text, Rect{textX, r.Y, r.W - (textX - r.X), r.H}, fg, s.bold, false)
@@ -638,23 +654,22 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		thumb := func(at float32) {
 			x := track.X + track.W*at
 			p.Circle(x, cy, 8, primary)
-			p.Circle(x, cy, 6, t.Surface)
+			p.Circle(x, cy, 7, RGB(255, 255, 255))
 		}
 		thumb(fraction)
 		if e.interval != nil {
 			thumb(end)
 		}
 	case kProgress:
-		p.RoundRect(r, r.H/2, t.Raised)
+		p.RoundRect(r, r.H/2, mix(backgroundUnder(t, e), t.Accent, .2))
 		p.RoundRect(Rect{r.X, r.Y, r.W * float32(e.value), r.H}, r.H/2, primary)
 	case kSelect:
-		p.RoundRect(r, s.radius, border)
-		p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, s.radius-1, t.Surface)
-		str := e.placeholder
+		p.frame(r, s.radius, border, fieldSurface(t, e))
+		str, ink := e.placeholder, t.Muted
 		if e.selected >= 0 && e.selected < len(e.options) {
-			str = e.options[e.selected]
+			str, ink = e.options[e.selected], fg
 		}
-		label(str, Rect{r.X + 12, r.Y, r.W - 36, r.H}, fg, false, false)
+		label(str, Rect{r.X + 12, r.Y, r.W - 36, r.H}, ink, false, false)
 		x, y := r.X+r.W-18, r.Y+r.H/2
 		p.Line(x-4, y-2, x, y+2, 1.5, t.Muted)
 		p.Line(x, y+2, x+4, y-2, 1.5, t.Muted)
@@ -668,15 +683,17 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		}
 	case kCanvas:
 		if e.draw != nil {
-			if p.canvas == nil {
-				p.canvas = &Painter{}
+			canvas := v.canvas
+			if canvas == nil {
+				canvas = &Painter{}
 			}
-			canvas := p.canvas
+			v.canvas = nil // Keep this painter private to the active draw callback.
 			*canvas = *p
-			canvas.canvas = nil
 			canvas.originX, canvas.originY = r.X, r.Y
 			canvas.bounds = Rect{W: r.W, H: r.H}
 			e.draw(canvas)
+			*canvas = Painter{}
+			v.canvas = canvas
 			p.solid = image.Rectangle{}
 		}
 	}
@@ -689,7 +706,8 @@ func switchTrack(r Rect) Rect {
 }
 
 func (v *view) paintFocus(p *Painter, e *Element) {
-	if v.focused == e && v.focusVisible {
+	group := e.style.tone == groupSurface && v.focused != nil && v.focused.parent == e
+	if (v.focused == e || group) && v.focusVisible {
 		t := v.theme
 		r := e.rect
 		radius := e.style.radius
@@ -697,8 +715,8 @@ func (v *view) paintFocus(p *Painter, e *Element) {
 			r = switchTrack(r)
 			radius = r.H / 2
 		}
-		if e.otpLength > 0 {
-			r.W = e.otpSlot(e.otpLength-1).X - r.X + e.otpSlot(0).W
+		if e.otpLength > 0 || e.parent != nil && (e.parent.style.tone == commandSurface || e.parent.style.tone == groupSurface) {
+			return
 		}
 		p.RoundRect(Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}, radius+3, RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128))
 	}
@@ -707,12 +725,20 @@ func (v *view) paintFocus(p *Painter, e *Element) {
 func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 	originalClip := p.clip
 	r, t, font := e.rect, v.theme, v.font(e)
-	p.RoundRect(r, e.style.radius, t.Surface)
+	if t.Surface != p.solidColor || !p.clip.In(p.solid) {
+		p.RoundRect(r, e.style.radius, t.Surface)
+	}
 	header, rowH := e.headerHeight(), e.rowHeight()
+	count := e.rowCount()
+	menuList := e.style.tone == commandSurface || e.style.tone == suggestionSurface
+	hovered := -1
+	if v.hover == e && (e.kind == kTable || menuList) {
+		hovered = v.hoveredRow
+	}
 	y0 := r.Y + header
 	p.clip = p.clip.Intersect(Rect{r.X, y0, r.W, r.H - header}.pixels(v.scale))
 	first := max(0, int((e.scroll+float32(p.clip.Min.Y)/p.scale-y0)/rowH)-1)
-	last := min(e.rowCount(), int((e.scroll+float32(p.clip.Max.Y)/p.scale-y0)/rowH)+2)
+	last := min(count, int((e.scroll+float32(p.clip.Max.Y)/p.scale-y0)/rowH)+2)
 	var th, flex float32
 	if !p.clip.Empty() && first < last {
 		_, th = v.text.Measure("Ag", font, false)
@@ -731,15 +757,32 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 			p.clip = bodyClip
 			continue
 		}
-		if e.selected == i {
-			p.Rect(rr, t.Raised)
-		} else if i%2 != 0 && e.kind == kTable && t.Surface != t.Background {
-			p.Rect(rr, mix(t.Surface, t.Background, .4))
+		if e.selected == i || hovered == i {
+			fill := t.Raised
+			if e.selected != i {
+				fill = mix(t.Surface, t.Raised, .5)
+			}
+			if menuList {
+				p.RoundRect(rr, 4, fill)
+			} else {
+				p.Rect(rr, fill)
+			}
+		}
+		if e.kind == kTable && i+1 < e.rowCount() {
+			p.Rect(Rect{rr.X, rr.Y + rr.H - 1, rr.W, 1}, t.Border)
 		}
 		ty := y + (rowH-th)/2
 		switch e.kind {
 		case kList:
-			p.Label(e.listText(i), r.X+12, ty, font, fg, false)
+			name := e.listText(i)
+			if e.style.tone == suggestionSurface && name == e.text {
+				p.icon(checkIcon, rr.X+rr.W-12, rr.Y+rr.H/2, fg)
+			}
+			x := r.X + 12
+			if menuList {
+				x = r.X + 8
+			}
+			p.Label(name, x, ty, font, fg, false)
 		case kTree:
 			tr := e.visibleTree[i]
 			x := r.X + 12 + float32(tr.depth)*18
@@ -779,7 +822,6 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 	headerClip := p.clip.Intersect(Rect{r.X, r.Y, r.W, header}.pixels(v.scale))
 	if e.kind == kTable && !headerClip.Empty() {
 		p.clip = headerClip
-		p.RoundRect(Rect{r.X, r.Y, r.W, header + e.style.radius}, e.style.radius, t.Raised)
 		p.Rect(Rect{r.X, r.Y + header - 1, r.W, 1}, t.Border)
 		x := r.X
 		for _, c := range e.columns {
@@ -792,19 +834,23 @@ func (v *view) paintRows(p *Painter, e *Element, fg Color) {
 		}
 		p.clip = originalClip
 	}
-	if total := float32(e.rowCount()) * rowH; total > r.H-header {
-		trackH := r.H - header
-		thumb := max(24, trackH*trackH/total)
-		y := y0 + (trackH-thumb)*e.scroll/max(1, e.maxScroll())
-		p.RoundRect(Rect{r.X + r.W - 5, y, 3, thumb}, 2, mix(t.Border, t.Muted, .3))
+	if thumb := e.rowScrollThumb(e.scroll); thumb.H > 0 {
+		p.RoundRect(thumb, 2, mix(t.Border, t.Muted, .3))
 	}
 }
-func (v *view) columnWidth(e *Element, i int) float32 {
-	if e.columns[i].Width > 0 {
-		return e.columns[i].Width
+
+func (e *Element) rowScrollThumb(scroll float32) Rect {
+	r, header := e.rect, e.headerHeight()
+	track := r.H - header
+	total := float32(e.rowCount()) * e.rowHeight()
+	if total <= track {
+		return Rect{}
 	}
-	return flexibleColumnWidth(e)
+	thumb := max(24, track*track/total)
+	y := r.Y + header + (track-thumb)*scroll/max(1, e.maxScroll())
+	return Rect{r.X + r.W - 5, y, 3, thumb}
 }
+
 func flexibleColumnWidth(e *Element) float32 {
 	fixed := float32(0)
 	flex := 0

@@ -10,8 +10,8 @@ import (
 )
 
 // MIT-SHM lets a local X server read uploads from shared memory instead of the
-// socket. A window's segment has two halves; tiles alternate between them, and
-// a half is rewritten only after the ShmCompletion of every upload from it.
+// socket. Small damage uses three slots for the exposed scroll strips. Larger
+// tiles use two slots. A slot stays busy until the server signals completion.
 // Remote servers, missing libXext and failed attaches use XPutImage instead.
 
 type xShmInfo struct {
@@ -26,9 +26,10 @@ type xShmInfo struct {
 type xShm struct {
 	info     *xShmInfo // C memory: Xlib keeps it in the image
 	img      *xImage
-	half     int
+	tileSize int
+	slots    int
 	next     int
-	pending  [2]int
+	pending  [3]int
 	putArgs  [11]uintptr
 	waitArgs [3]uintptr
 	event    xEvent
@@ -109,9 +110,9 @@ func (b *xBackend) shmAvailable() bool {
 	return b.shmState > 0
 }
 
-// shmBuffers returns a segment whose halves hold capacity bytes, or nil.
+// shmBuffers returns a segment whose slots hold capacity bytes, or nil.
 func (w *xWindow) shmBuffers(capacity int) *xShm {
-	if s := w.shm; s != nil && s.half == capacity {
+	if s := w.shm; s != nil && s.tileSize == capacity {
 		return s
 	}
 	w.releaseShm()
@@ -128,9 +129,13 @@ func (w *xWindow) shmBuffers(capacity int) *xShm {
 	return s
 }
 
-func (b *xBackend) newShm(half int) (*xShm, bool) {
+func (b *xBackend) newShm(tileSize int) (*xShm, bool) {
 	const ipcPrivate, ipcCreate, ipcRemove = 0, 0o1000, 0
-	id := xs.shmget(ipcPrivate, uintptr(2*half), ipcCreate|0o600)
+	slots := 2
+	if tileSize <= 32<<10 {
+		slots = 3
+	}
+	id := xs.shmget(ipcPrivate, uintptr(slots*tileSize), ipcCreate|0o600)
 	if id < 0 {
 		return nil, false
 	}
@@ -165,7 +170,7 @@ func (b *xBackend) newShm(half int) (*xShm, bool) {
 		xl.free(unsafe.Pointer(info))
 		return nil, false
 	}
-	return &xShm{info: info, img: img, half: half}, true
+	return &xShm{info: info, img: img, tileSize: tileSize, slots: slots}, true
 }
 
 // shmAttach reports attach errors instead of letting the error handler stop the app.
@@ -192,10 +197,13 @@ func (w *xWindow) releaseShm() {
 	xl.free(unsafe.Pointer(s.info))
 }
 
-// shmTile returns the next free half, waiting for the server only if both are in use.
+// shmTile checks queued completions before synchronously waiting for a slot.
 func (w *xWindow) shmTile(s *xShm) []byte {
+	if !s.pickSlot() {
+		w.b.drainShmCompletions(s)
+	}
 	for range 100 {
-		if s.pending[s.next] == 0 {
+		if s.pickSlot() {
 			break
 		}
 		// After XSync the server has processed earlier puts; their completions are queued.
@@ -203,7 +211,18 @@ func (w *xWindow) shmTile(s *xShm) []byte {
 		purego.SyscallN(xs.rawSync, s.waitArgs[:2]...)
 		w.b.drainShmCompletions(s)
 	}
-	return unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(s.info.Addr), s.next*s.half)), s.half)
+	return unsafe.Slice((*byte)(unsafe.Add(unsafe.Pointer(s.info.Addr), s.next*s.tileSize)), s.tileSize)
+}
+
+func (s *xShm) pickSlot() bool {
+	// Reuse lower slots first so spare pages stay untouched during small frames.
+	for i, pending := range s.pending[:s.slots] {
+		if pending == 0 {
+			s.next = i
+			return true
+		}
+	}
+	return false
 }
 
 func (b *xBackend) drainShmCompletions(s *xShm) {
@@ -223,20 +242,19 @@ func (b *xBackend) shmEvent(raw *xEvent) {
 }
 
 func (w *xWindow) shmPut(s *xShm, x, y int32, width, height uint32) {
-	s.img.Data = (*byte)(unsafe.Add(unsafe.Pointer(s.info.Addr), s.next*s.half))
+	s.img.Data = (*byte)(unsafe.Add(unsafe.Pointer(s.info.Addr), s.next*s.tileSize))
 	s.putArgs = [11]uintptr{w.b.display, w.id, w.gc, uintptr(unsafe.Pointer(s.img)), 0, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height), 1}
 	purego.SyscallN(xs.putImage, s.putArgs[:]...)
 	s.pending[s.next]++
-	s.next = 1 - s.next
 	runtime.KeepAlive(s)
 }
 
 // shmCompleted counts an upload the server finished reading. Completions for a
 // replaced segment carry another segment id and are ignored.
 func (w *xWindow) shmCompleted(seg, offset uintptr) {
-	if s := w.shm; s != nil && s.info.Seg == seg && offset%uintptr(s.half) == 0 && offset/uintptr(s.half) < 2 {
-		if h := offset / uintptr(s.half); s.pending[h] > 0 {
-			s.pending[h]--
+	if s := w.shm; s != nil && s.info.Seg == seg && offset%uintptr(s.tileSize) == 0 && offset/uintptr(s.tileSize) < uintptr(s.slots) {
+		if slot := offset / uintptr(s.tileSize); s.pending[slot] > 0 {
+			s.pending[slot]--
 		}
 	}
 }

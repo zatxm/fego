@@ -180,6 +180,57 @@ func TestCacheBudgets(t *testing.T) {
 	}
 }
 
+func TestOversizedTextKeepsOnlyVisibleGlyphs(t *testing.T) {
+	s := testSystem(t)
+	text := strings.Repeat(strings.Repeat("Go café 中文 e\u0301\t", 120)+"\n", 10)
+	size := fontSize(14)
+	full := s.layout(text, size, false, &glyphViewport{
+		left: -math.MaxFloat32, right: math.MaxFloat32,
+		top: -math.MaxFloat32, bottom: math.MaxFloat32,
+	})
+	viewport := glyphViewport{x: -530, y: -54, left: 31, right: 328, top: 3, bottom: 91}
+	var want []positioned
+	for _, g := range full.glyphs {
+		x, y := viewport.x+float32(g.x)/64, viewport.y+float32(g.y)/64
+		if x >= viewport.left && x <= viewport.right && y >= viewport.top && y <= viewport.bottom {
+			want = append(want, g)
+		}
+	}
+	if len(want) == 0 || len(want) >= len(full.glyphs)/10 {
+		t.Fatal("invalid oversized text fixture")
+	}
+	clipped := s.layout(text, size, false, &viewport)
+	metrics := s.layout(text, size, false, nil)
+	if !reflect.DeepEqual(clipped.glyphs, want) || len(metrics.glyphs) != 0 || len(s.layouts) != 0 {
+		t.Fatal("oversized text retained extra glyphs or changed visible positions")
+	}
+	for _, result := range []*layout{clipped, metrics} {
+		if result.w != full.w || result.h != full.h || result.minX != full.minX || result.maxX != full.maxX {
+			t.Fatal("clipping changed text metrics")
+		}
+	}
+}
+
+func TestLayoutCacheReusesOldestStorageWithinBudget(t *testing.T) {
+	s := testSystem(t)
+	size := fontSize(14)
+	for i := range maxLayouts {
+		s.layout(fmt.Sprintf("Label %03d", i), size, false, nil)
+	}
+	first := s.layouts[layoutKey{"Label 000", size, false}]
+	if first == nil {
+		t.Fatal("unexpected cache eviction before reaching the limit")
+	}
+	if got := s.layout("Label new", size, false, nil); got != first || got.glyphs[len(got.glyphs)-1].r != 'w' {
+		t.Fatal("oldest storage was not reused for the new label")
+	}
+	for i := range maxLayouts {
+		s.layout(fmt.Sprintf("A longer label with a much larger glyph buffer %03d", i), size, false, nil)
+		if s.layoutBytes > maxLayoutBytes || len(s.layouts) > maxLayouts {
+			t.Fatal("layout exceeded its count or byte budget")
+		}
+	}
+}
 func TestASCIIGlyphCacheInvalidates(t *testing.T) {
 	s := testSystem(t)
 	key := glyphKey{s.latin(0), fontSize(14), 'A'}
@@ -308,10 +359,10 @@ func TestNumericLayoutsMatchGeneralShaping(t *testing.T) {
 	for _, text := range []string{"12345", "-123.45", "+1,234.00%", "12:34:56", "2026/11/10", "12345678901234567890123456789012"} {
 		for _, bold := range []bool{false, true} {
 			for _, size := range []float32{11, 16, 23.5} {
-				n := s.layout(text, fontSize(size), bold)
+				n := s.layout(text, fontSize(size), bold, nil)
 				positions := append([]positioned(nil), n.glyphs...)
 				width, height := n.w, n.h
-				reference := s.layout("\n"+text, fontSize(size), bold)
+				reference := s.layout("\n"+text, fontSize(size), bold, nil)
 				if width != reference.w || height*2 != reference.h || len(positions) != len(reference.glyphs) {
 					t.Fatal("numeric metrics differ", text, size, bold)
 				}

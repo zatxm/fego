@@ -29,7 +29,7 @@ const (
 	maxGlyphs      = 4096
 	maxGlyphBytes  = 8 << 20
 	maxLayouts     = 128
-	maxLayoutBytes = 128 << 10
+	maxLayoutBytes = 96 << 10
 	maxFaces       = 32
 )
 
@@ -102,6 +102,8 @@ type System struct {
 	asciiSources  [2][128]*source
 	kerns         [512]kernEntry
 	layouts       map[layoutKey]*layout
+	layoutOrder   [maxLayouts]layoutKey
+	layoutHead    int
 	layoutBytes   int
 	numeric       layout
 	numericKey    [32]byte
@@ -109,6 +111,7 @@ type System struct {
 	numericSize   fixed.Int26_6
 	numericBold   bool
 	numericGlyphs [32]positioned
+	clippedGlyphs []positioned
 	ink           color.RGBA
 	inkTerms      [4]uint32
 	blend         [256]glyphBlend
@@ -172,6 +175,7 @@ func (s *System) Close() error {
 	clear(s.asciiGlyphs[:])
 	s.asciiFace = faceKey{}
 	s.layouts = nil
+	clear(s.layoutOrder[:])
 	s.coverage = nil
 	s.asciiSources = [2][128]*source{}
 	s.kerns = [512]kernEntry{}
@@ -180,6 +184,7 @@ func (s *System) Close() error {
 	s.buffer = sfnt.Buffer{}
 	s.numeric = layout{}
 	clear(s.numericGlyphs[:])
+	s.clippedGlyphs = nil
 	s.closed = true
 	return errors.Join(errs...)
 }
@@ -196,7 +201,7 @@ func (s *System) Measure(text string, size float32, bold bool) (w, h float32) {
 	if s.closed {
 		return 0, 0
 	}
-	l := s.layout(text, q, bold)
+	l := s.layout(text, q, bold, nil)
 	return float32(l.w) / 64, float32(l.h) / 64
 }
 
@@ -286,8 +291,13 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 	if s.closed {
 		return
 	}
-	l := s.layout(text, q, bold)
-	if x+float32(l.maxX)/64 < float32(clip.Min.X)-size*2 || x+float32(l.minX)/64 > float32(clip.Max.X)+size*2 {
+	viewport := glyphViewport{
+		x: x, y: y,
+		left: float32(clip.Min.X) - size*2, right: float32(clip.Max.X) + size*2,
+		top: float32(clip.Min.Y) - size*2, bottom: float32(clip.Max.Y) + size*2,
+	}
+	l := s.layout(text, q, bold, &viewport)
+	if x+float32(l.maxX)/64 < viewport.left || x+float32(l.minX)/64 > viewport.right {
 		return
 	}
 	s.setInk(ink)
@@ -297,8 +307,7 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 		gx := x + float32(p.x)/64
 		gy := y + float32(p.y)/64
 		// Reject offscreen glyphs before converting unbounded coordinates to int.
-		if gx < float32(clip.Min.X)-size*2 || gx > float32(clip.Max.X)+size*2 ||
-			gy < float32(clip.Min.Y)-size*2 || gy > float32(clip.Max.Y)+size*2 {
+		if gx < viewport.left || gx > viewport.right || gy < viewport.top || gy > viewport.bottom {
 			continue
 		}
 		key := glyphKey{p.source, q, p.r}
@@ -500,7 +509,12 @@ func (s *System) rasterize(key glyphKey, g *glyph) {
 	s.glyphBytes += len(g.mask.Pix)
 }
 
-func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
+type glyphViewport struct {
+	x, y                     float32
+	left, right, top, bottom float32
+}
+
+func (s *System) layout(text string, size fixed.Int26_6, bold bool, viewport *glyphViewport) *layout {
 	key := layoutKey{text, size, bold}
 	if len(text) == s.numericLength && size == s.numericSize && bold == s.numericBold && text == string(s.numericKey[:s.numericLength]) {
 		return &s.numeric
@@ -523,13 +537,25 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 	}
 	base := s.face(faceKey{s.latin(weight), size}).Metrics()
 	var l *layout
+	var cache bool
 	if numeric {
 		s.numeric = layout{glyphs: s.numericGlyphs[:0]}
 		l = &s.numeric
 	} else {
-		// Size the cached glyph run once instead of leaving append growth garbage.
-		l = &layout{glyphs: make([]positioned, 0, utf8.RuneCountInString(normal))}
+		l, cache = s.layoutStorage(text, utf8.RuneCountInString(normal))
+		if !cache {
+			l = &layout{}
+			if viewport != nil {
+				// Keep a small scratch buffer; larger visible ranges use temporary storage.
+				if s.clippedGlyphs == nil {
+					s.clippedGlyphs = make([]positioned, 0, 128)
+				}
+				l.glyphs = s.clippedGlyphs
+			}
+		}
 	}
+	// Oversized text still needs all metrics, but only visible glyphs need placement.
+	storeAll := numeric || cache
 	x, top := int64(0), int64(0)
 	ascent, descent := base.Ascent, base.Descent
 	lineStart := 0
@@ -539,8 +565,15 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 	var metricsSource *source
 	var metrics font.Metrics
 	finishLine := func() {
+		baseline := top + int64(ascent)
+		if !storeAll && viewport != nil {
+			gy := viewport.y + float32(baseline)/64
+			if gy < viewport.top || gy > viewport.bottom {
+				l.glyphs = l.glyphs[:lineStart]
+			}
+		}
 		for i := lineStart; i < len(l.glyphs); i++ {
-			l.glyphs[i].y = top + int64(ascent)
+			l.glyphs[i].y = baseline
 		}
 		l.w = max(l.w, x)
 		top += int64(max(base.Height, ascent+descent))
@@ -572,7 +605,14 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 			metrics, metricsSource = s.face(faceKey{src, size}).Metrics(), src
 		}
 		ascent, descent = max(ascent, metrics.Ascent), max(descent, metrics.Descent)
-		l.glyphs = append(l.glyphs, positioned{source: src, r: r, x: x})
+		keep := storeAll
+		if !keep && viewport != nil {
+			gx := viewport.x + float32(x)/64
+			keep = gx >= viewport.left && gx <= viewport.right
+		}
+		if keep {
+			l.glyphs = append(l.glyphs, positioned{source: src, r: r, x: x})
+		}
 		l.minX, l.maxX = min(l.minX, x), max(l.maxX, x)
 		x += int64(g.advance)
 		previous, prevIndex = src, g.index
@@ -584,17 +624,44 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool) *layout {
 		s.numericLength, s.numericSize, s.numericBold = len(text), size, bold
 		return l
 	}
-	n := len(text) + cap(l.glyphs)*32 + 96
-	if n <= maxLayoutBytes {
-		if len(s.layouts) >= maxLayouts || s.layoutBytes+n > maxLayoutBytes {
-			clear(s.layouts)
-			s.layoutBytes = 0
-		}
+	if cache {
 		key.text = strings.Clone(text)
+		s.layoutOrder[(s.layoutHead+len(s.layouts))%maxLayouts] = key
 		s.layouts[key] = l
-		s.layoutBytes += n
+		s.layoutBytes += layoutSize(text, cap(l.glyphs))
 	}
 	return l
+}
+
+func layoutSize(text string, glyphs int) int {
+	return len(text) + glyphs*32 + 96
+}
+
+// Evict the oldest labels first. Reuse a victim's glyph storage when it fits
+// so scrolling past the cache budget does not free and rebuild the whole cache.
+func (s *System) layoutStorage(text string, glyphs int) (*layout, bool) {
+	needed := layoutSize(text, glyphs)
+	if needed > maxLayoutBytes {
+		return nil, false
+	}
+	var reuse *layout
+	for len(s.layouts) >= maxLayouts || s.layoutBytes+needed > maxLayoutBytes {
+		key := s.layoutOrder[s.layoutHead]
+		old := s.layouts[key]
+		delete(s.layouts, key)
+		s.layoutOrder[s.layoutHead] = layoutKey{}
+		s.layoutHead = (s.layoutHead + 1) % maxLayouts
+		capacity := cap(old.glyphs)
+		s.layoutBytes -= layoutSize(key.text, capacity)
+		if reuse == nil && capacity >= glyphs && capacity <= glyphs+8 {
+			reuse = old
+		}
+	}
+	if reuse != nil && s.layoutBytes+layoutSize(text, cap(reuse.glyphs)) <= maxLayoutBytes {
+		*reuse = layout{glyphs: reuse.glyphs[:0]}
+		return reuse, true
+	}
+	return &layout{glyphs: make([]positioned, 0, glyphs)}, true
 }
 
 // Rapidly changing counters reuse positions without evicting cached UI labels.

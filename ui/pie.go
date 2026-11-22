@@ -114,7 +114,9 @@ func PieChart(slices []Slice, onSelect func(int)) *Element {
 	canvas.own().onHover = func(x, y float32) {
 		if i := partAt(x, y); i != hovered {
 			hovered = i
-			canvas.touch(false)
+			if canvas.view != nil {
+				canvas.view.repaint(canvas, false)
+			}
 		}
 	}
 	canvas.own().onNavigate = func(key string) {

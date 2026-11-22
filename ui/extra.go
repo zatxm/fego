@@ -13,35 +13,34 @@ import (
 // Tab moves between its controls; Enter or Space chooses a day.
 type CalendarView struct {
 	*Element
-	date, month time.Time
-	title       *Element
-	days        [42]*Element
-	dates       [42]time.Time
-	onDate      func(time.Time)
-	onPick      func(time.Time)
+	date, month, today time.Time
+	title              *Element
+	days               [42]*Element
+	dates              [42]time.Time
+	selectedDay        int
+	onDate             func(time.Time)
+	onPick             func(time.Time)
 }
 
 func Calendar(date time.Time) *CalendarView {
 	if date.IsZero() {
 		date = time.Now()
 	}
-	c := &CalendarView{Element: Column().Gap(8).Width(320)}
+	c := &CalendarView{Element: Column().Gap(4).Width(248).Padding(12)}
 	c.title = Text("").Bold()
-	previous := Button("‹", func() { c.showMonth(c.month.AddDate(0, -1, 0)) }).Width(36).Label("Previous month")
-	next := Button("›", func() { c.showMonth(c.month.AddDate(0, 1, 0)) }).Width(36).Label("Next month")
+	previous := iconButton(chevronLeft, "Previous month", func() { c.showMonth(c.month.AddDate(0, -1, 0)) })
+	next := iconButton(chevronRight, "Next month", func() { c.showMonth(c.month.AddDate(0, 1, 0)) })
 	header := Row(previous, Box(c.title).Center().Grow(1), next)
 	weekdays := Grid(7).Gap(4)
 	for _, day := range []string{"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"} {
-		weekdays.Append(Box(Text(day).FontSize(12)).Center().Height(24))
+		weekdays.Append(Box(Text(day).FontSize(12).Muted()).Center().Height(24))
 	}
-	grid := Grid(7).Gap(4)
+	grid := Grid(7).Gap(0)
 	for i := range c.days {
 		i := i
 		button := Button("", func() {
 			chosen := c.dates[i]
-			if c.days[i].hidden {
-				return
-			}
+
 			changed := !sameDate(c.date, chosen)
 			c.SetDate(chosen)
 			if changed && c.onDate != nil {
@@ -50,9 +49,26 @@ func Calendar(date time.Time) *CalendarView {
 			if c.onPick != nil {
 				c.onPick(c.date)
 			}
-		}).Fill().Radius(6)
+		}).Height(32).Radius(6)
+		button.style.button = dayButton
+		button.own().onNavigate = func(key string) {
+			var days int
+			switch key {
+			case "ArrowLeft":
+				days = -1
+			case "ArrowRight":
+				days = 1
+			case "ArrowUp":
+				days = -7
+			case "ArrowDown":
+				days = 7
+			default:
+				return
+			}
+			c.focusDay(c.dates[i].AddDate(0, 0, days))
+		}
 		c.days[i] = button
-		grid.Append(Box(button).Height(34))
+		grid.Append(button)
 	}
 	c.Children(header, weekdays, grid)
 	return c.SetDate(date)
@@ -67,42 +83,70 @@ func sameDate(a, b time.Time) bool {
 func (c *CalendarView) Date() time.Time { return c.date }
 func (c *CalendarView) SetDate(date time.Time) *CalendarView {
 	c.date = dateOnly(date)
-	month := time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location())
-	if !c.month.IsZero() && c.month.Equal(month) && c.month.Location() == month.Location() {
-		for i, button := range c.days {
-			selected := !button.hidden && sameDate(c.date, c.dates[i])
-			if button.primary != selected {
-				button.own().primary = selected
-				button.touch(false)
+	month := c.date.AddDate(0, 0, 1-c.date.Day())
+	if c.month.IsZero() || !c.month.Equal(month) || c.month.Location() != month.Location() {
+		c.showMonth(month)
+		return c
+	}
+	index := (int(month.Weekday())+6)%7 + date.Day() - 1
+	if c.selectedDay != index {
+		if c.selectedDay >= 0 {
+			previous := c.days[c.selectedDay]
+			previous.primary = false
+			if c.view != nil {
+				c.view.repaint(previous, false)
 			}
 		}
-	} else {
-		c.showMonth(month)
+		c.selectedDay = index
+		selected := c.days[index]
+		selected.primary = true
+		if c.view != nil {
+			c.view.repaint(selected, false)
+		}
 	}
 	return c
 }
 func (c *CalendarView) OnChange(fn func(time.Time)) *CalendarView { c.onDate = fn; return c }
 func (c *CalendarView) showMonth(month time.Time) {
 	c.month = month
+	c.today = dateOnly(time.Now().In(month.Location()))
+	c.selectedDay = -1
 	c.title.SetText(month.Format("January 2006"))
 	start := (int(month.Weekday()) + 6) % 7
-	count := time.Date(month.Year(), month.Month()+1, 0, 0, 0, 0, 0, month.Location()).Day()
 	for i, button := range c.days {
-		day := i - start + 1
-		if day < 1 || day > count {
-			c.dates[i] = time.Time{}
-			button.Hidden(true)
-			continue
-		}
-		date := time.Date(month.Year(), month.Month(), day, 0, 0, 0, 0, month.Location())
+		date := month.AddDate(0, 0, i-start)
 		c.dates[i] = date
-		button.Hidden(false).SetText(strconv.Itoa(day)).Label(date.Format("2006-01-02"))
-		button.own().primary = sameDate(c.date, date)
-		button.touch(false)
+		button.style.button = dayButton
+		if date.Month() != month.Month() {
+			button.style.button = outsideDayButton
+		} else if sameDate(date, c.today) {
+			button.style.button = todayButton
+		}
+		button.text = strconv.Itoa(date.Day())
+		button.label = date.Format("2006-01-02")
+		button.primary = sameDate(c.date, date)
+		if button.primary {
+			c.selectedDay = i
+		}
+	}
+	c.touch(false)
+}
+
+func (c *CalendarView) focusDay(date time.Time) {
+	if date.Month() != c.month.Month() || date.Year() != c.month.Year() {
+		c.showMonth(time.Date(date.Year(), date.Month(), 1, 0, 0, 0, 0, date.Location()))
+	}
+	if c.view != nil {
+		for i, day := range c.dates {
+			if sameDate(date, day) {
+				c.view.focus(c.days[i])
+				return
+			}
+		}
 	}
 }
 
-// DateField accepts an ISO date and also opens an inline month picker.
+// DateField accepts an ISO date and also opens a calendar popover.
 // Invalid intermediate edits stay visible; Date returns the last valid date.
 type DateField struct {
 	*Element
@@ -122,9 +166,23 @@ func DatePicker(date time.Time) *DateField {
 	d.Input = TextInput("").Placeholder("YYYY-MM-DD").Label("Date").Grow(1)
 	d.Calendar = Calendar(date)
 	d.Calendar.Hidden(true)
-	toggle := Button("▦", func() { d.Calendar.Hidden(!d.Calendar.hidden) }).Width(40).Label("Choose date")
+	d.Calendar.style.card = true
+	anchor := InputGroup(d.Input, nil, nil)
+	toggle := iconButton(calendarIcon, "Choose date", func() {
+		if v := anchor.view; v != nil {
+			if v.popover.content != d.Calendar.Element {
+				v.openPopover(anchor, d.Calendar.Element, nil)
+				if v.focusVisible {
+					d.Calendar.focusDay(d.date)
+				}
+			} else {
+				v.closePopover()
+			}
+		}
+	})
+	anchor.Append(toggle)
 	d.errorText = Text("Use a valid date: YYYY-MM-DD").FontSize(12).Hidden(true)
-	d.Children(Row(d.Input, toggle).Gap(6), d.errorText, d.Calendar.Element)
+	d.Children(anchor, d.errorText)
 	d.errorText.style.tone = dangerText
 	d.Input.OnChange(func(text string) {
 		date, err := time.ParseInLocation("2006-01-02", text, d.date.Location())
@@ -143,9 +201,9 @@ func DatePicker(date time.Time) *DateField {
 	d.Calendar.onPick = func(date time.Time) {
 		changed := !sameDate(d.date, date)
 		d.SetDate(date)
-		d.Calendar.Hidden(true)
-		if d.Input.view != nil {
-			d.Input.view.focus(d.Input)
+		if v := d.Input.view; v != nil {
+			v.closePopover()
+			v.focus(d.Input)
 		}
 		if changed && d.onDate != nil {
 			d.onDate(date)
@@ -305,33 +363,65 @@ func (n *NumberField) Label(label string) *NumberField {
 // list, arrows select suggestions, and Enter/Space accepts the selected row.
 type ComboBoxView struct {
 	*Element
-	Input            *Element
-	Choices          *Element
-	options, matches []string
-	noMatches        *Element
-	value            string
-	onText           func(string)
+	Input         *Element
+	Choices       *Element
+	options       []string
+	matches       []int
+	query         string
+	all           bool
+	noMatches     *Element
+	anchor, panel *Element
+	value         string
+	onText        func(string)
+	closeChoices  func()
 }
 
 func ComboBox(options []string, value string) *ComboBoxView {
 	c := &ComboBoxView{Element: Column().Gap(6), options: append([]string(nil), options...), value: value}
+	c.closeChoices = c.clearChoices
 	c.Input = TextInput(value).Label("Editable choice").Grow(1)
-	c.Choices = List(0, func(i int) string { return c.matches[i] }).Label("Suggestions").Hidden(true)
-	c.noMatches = Text("No suggestions").FontSize(12).Hidden(true)
-	toggle := Button("▾", func() {
-		if !c.Choices.hidden || !c.noMatches.hidden {
+	c.Choices = List(0, c.option).Label("Suggestions").Hidden(true)
+	c.Choices.style.tone = suggestionSurface
+	c.Choices.text = value
+	c.noMatches = Text("No suggestions").FontSize(13).Muted().Padding(8).Hidden(true)
+	c.panel = Card(c.Choices, c.noMatches).Gap(0).Padding(4).Radius(8).Hidden(true)
+	toggle := iconButton(chevronDown, "Show choices", func() {
+		if !c.panel.hidden {
 			c.hideChoices()
 			return
 		}
 		c.filter("")
-	}).Width(38).Label("Show choices")
-	c.Children(Row(c.Input, toggle).Gap(6), c.Choices, c.noMatches)
+	})
+	c.anchor = InputGroup(c.Input, nil, toggle)
+	c.Children(c.anchor)
 	c.Input.OnChange(func(text string) { c.change(text); c.filter(text) })
+	c.Input.own().onNavigate = func(key string) {
+		if c.panel.hidden {
+			c.filter(c.Input.Text())
+		}
+		if !c.Choices.hidden {
+			next := c.Choices.Selected() + 1
+			if key == "ArrowUp" {
+				next = c.Choices.Selected() - 1
+			}
+			next = max(0, min(c.Choices.count-1, next))
+			c.Choices.SetSelected(next)
+			c.Choices.revealRow(next)
+		}
+	}
+	c.Input.OnSubmit(func() {
+		if !c.panel.hidden && c.Choices.Selected() >= 0 {
+			if choose := c.Choices.onSelect; choose != nil {
+				choose(c.Choices.Selected())
+			}
+			c.hideChoices()
+		}
+	})
 	c.Choices.OnSelect(func(index int) {
-		if index < 0 || index >= len(c.matches) {
+		if index < 0 || index >= c.Choices.count {
 			return
 		}
-		text := c.matches[index]
+		text := c.option(index)
 		c.Input.SetText(text)
 		c.change(text)
 	})
@@ -346,28 +436,93 @@ func ComboBox(options []string, value string) *ComboBoxView {
 func (c *ComboBoxView) change(text string) {
 	if c.value != text {
 		c.value = text
+		c.Choices.text = text
 		if c.onText != nil {
 			c.onText(text)
 		}
 	}
 }
-func (c *ComboBoxView) filter(query string) {
-	c.matches = c.matches[:0]
-	query = strings.ToLower(query)
-	for _, option := range c.options {
-		if strings.Contains(strings.ToLower(option), query) {
-			c.matches = append(c.matches, option)
-		}
+func (c *ComboBoxView) option(index int) string {
+	if !c.all {
+		index = c.matches[index]
 	}
-	c.Choices.SetCount(len(c.matches)).SetSelected(-1)
-	c.Choices.scroll = 0
-	c.Choices.Height(float32(min(6, max(1, len(c.matches)))) * c.Choices.rowHeight()).Hidden(len(c.matches) == 0)
-	c.noMatches.Hidden(len(c.matches) != 0)
+	return c.options[index]
 }
-func (c *ComboBoxView) hideChoices() { c.Choices.Hidden(true); c.noMatches.Hidden(true) }
+
+func (c *ComboBoxView) filter(query string) {
+	query = strings.ToLower(query)
+	previous := c.matches
+	c.matches = previous[:0]
+	count := len(c.options)
+	switch {
+	case query == "":
+	case c.query != "" && strings.HasPrefix(query, c.query):
+		for _, i := range previous {
+			if containsFolded(c.options[i], query) {
+				c.matches = append(c.matches, i)
+			}
+		}
+		count = len(c.matches)
+	default:
+		for i, option := range c.options {
+			if containsFolded(option, query) {
+				c.matches = append(c.matches, i)
+			}
+		}
+		count = len(c.matches)
+	}
+	c.query, c.all = query, query == ""
+	c.Choices.SetCount(count).SetSelected(-1)
+	c.Choices.scroll = 0
+	height := float32(min(6, max(1, count))) * c.Choices.rowHeight()
+	if c.Choices.style.h != height {
+		c.Choices.Height(height)
+	}
+	c.Choices.Hidden(count == 0)
+	c.noMatches.Hidden(count != 0)
+	if v := c.anchor.view; v != nil {
+		v.openPopover(c.anchor, c.panel, c.closeChoices)
+	}
+}
+
+// Search ASCII options without allocating a lower-case copy for each key.
+func containsFolded(option, lower string) bool {
+	var folded [128]byte
+	if len(option) > len(folded) {
+		return strings.Contains(strings.ToLower(option), lower)
+	}
+	for i := 0; i < len(option); i++ {
+		ch := option[i]
+		if ch >= 0x80 {
+			return strings.Contains(strings.ToLower(option), lower)
+		}
+		if ch >= 'A' && ch <= 'Z' {
+			ch += 'a' - 'A'
+		}
+		folded[i] = ch
+	}
+	return bytes.Contains(folded[:len(option)], []byte(lower))
+}
+
+func (c *ComboBoxView) hideChoices() {
+	if v := c.panel.view; v != nil {
+		v.closePopover()
+	} else {
+		c.clearChoices()
+	}
+}
+
+func (c *ComboBoxView) clearChoices() {
+	c.Choices.Hidden(true).SetCount(0)
+	c.noMatches.Hidden(true)
+	c.matches = nil
+	c.query = ""
+}
+
 func (c *ComboBoxView) Text() string { return c.value }
 func (c *ComboBoxView) SetText(text string) *ComboBoxView {
 	c.value = text
+	c.Choices.text = text
 	c.Input.SetText(text)
 	c.hideChoices()
 	return c
@@ -381,9 +536,9 @@ func (c *ComboBoxView) Label(label string) *ComboBoxView {
 }
 
 func Badge(text string) *Element {
-	label := Text(text).FontSize(12).Bold()
+	label := Text(text).FontSize(12)
 	label.style.tone = primaryText
-	badge := Box(label).Padding(4, 10).Radius(20)
+	badge := Box(label).Padding(2, 8).Radius(12)
 	badge.style.tone = primarySurface
 	return badge
 }

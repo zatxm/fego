@@ -312,6 +312,15 @@ func testX11Native(t *testing.T, shm bool) {
 			if w.imageBytes < 160*100*4 {
 				t.Error("full repaint failed to regrow upload buffer")
 			}
+			now := time.Now()
+			w.uploadIdleAt = now.Add(xUploadIdleTime)
+			if next := b.reclaimUploads(now); next != xUploadIdleTime || w.imageBytes == 0 {
+				t.Error("large upload buffer released before the idle deadline")
+			}
+			if next := b.reclaimUploads(now.Add(xUploadIdleTime)); next >= 0 || w.imageBytes != 0 || w.img != nil || w.shm != nil {
+				t.Error("idle upload buffer was retained")
+			}
+
 			tall, wide := image.Rect(20, 10, 23, 90), image.Rect(10, 30, 150, 32)
 			for y := tall.Min.Y; y < tall.Max.Y; y++ {
 				for x := tall.Min.X; x < tall.Max.X; x++ {
@@ -395,16 +404,27 @@ func testX11Native(t *testing.T, shm bool) {
 			}
 			w.SetCursor("text")
 			w.SetSize(180, 120)
-			syncX(b.display, 0)
-			for xl.pending(b.display) > 0 {
-				var e xEvent
-				xl.nextEvent(b.display, &e)
-				b.event(&e)
+			// Xwayland's window manager can deliver ConfigureNotify after XSync.
+			deadline := time.Now().Add(time.Second)
+			for {
+				for xl.pending(b.display) > 0 {
+					var e xEvent
+					xl.nextEvent(b.display, &e)
+					b.event(&e)
+				}
+				remaining := time.Until(deadline)
+				if w.width == 180 && w.height == 120 || remaining <= 0 {
+					break
+				}
+				if err := b.wait(remaining); err != nil {
+					t.Error(err)
+					break
+				}
 			}
 			if w.width != 180 || w.height != 120 {
 				t.Errorf("native resize=%dx%d", w.width, w.height)
 			}
-			if w.shm != nil && w.shm.pending != [2]int{} {
+			if w.shm != nil && w.shm.pending != [3]int{} {
 				t.Errorf("shared-memory completions not consumed: %v", w.shm.pending)
 			}
 			if shm && b.shmAvailable() {
@@ -437,6 +457,28 @@ func testX11Native(t *testing.T, shm bool) {
 		t.Fatal("native resources retained after close")
 	}
 	b.Wake()
+}
+
+func TestX11ClipboardAcknowledgesINCRWithOneDelete(t *testing.T) {
+	get, remove := xl.getProperty, xl.deleteProperty
+	t.Cleanup(func() { xl.getProperty, xl.deleteProperty = get, remove })
+	b := &xBackend{incr: 1, transfer: &xClipboardRead{window: &xWindow{}}}
+	xl.getProperty = func(_, _, _ uintptr, _, _ int64, deleteAfterRead int32, _ uintptr, kind *uintptr, format *int32, count, _ *uint64, _ **byte) int32 {
+		if deleteAfterRead != 1 {
+			t.Error("reading the INCR header did not acknowledge it")
+		}
+		*kind, *format, *count = b.incr, 32, 1
+		return 0
+	}
+	xl.deleteProperty = func(_, _, _ uintptr) int32 {
+		t.Error("deleting again can discard the first data chunk")
+		return 0
+	}
+
+	b.readClipboardProperty()
+	if !b.transfer.incremental || b.transfer.done || b.transfer.failed {
+		t.Fatal("INCR transfer did not start")
+	}
 }
 
 func TestX11ClipboardInterop(t *testing.T) {

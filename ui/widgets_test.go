@@ -85,15 +85,18 @@ func TestMenuBreadcrumbsAndDialog(t *testing.T) {
 		t.Fatal("field label missing")
 	}
 	clickElement(view, menu)
-	view.Key("Enter", false, false)
-	if chosen != 0 || view.Document.live.popup != nil {
-		t.Fatal("disabled menu action ran")
+	popup := view.Document.live.popup
+	if popup.selected != 1 {
+		t.Fatal("keyboard highlight did not skip disabled item")
 	}
-	clickElement(view, menu)
-	view.Key("ArrowDown", false, false)
+	blocked := popup.row(0)
+	view.Click(blocked.X+5, blocked.Y+5)
+	if chosen != 0 || view.Document.live.popup == nil {
+		t.Fatal("disabled item intercepted selection")
+	}
 	view.Key("Enter", false, false)
-	if chosen != 1 {
-		t.Fatal("menu action did not run")
+	if chosen != 1 || view.Document.live.popup != nil {
+		t.Fatal("menu action did not run or dismiss")
 	}
 	clickElement(view, crumbs.children[0])
 	if chosen != 11 {
@@ -102,9 +105,22 @@ func TestMenuBreadcrumbsAndDialog(t *testing.T) {
 	close := Button("Close", view.Document.CloseDialog)
 	view.Document.ShowDialog(Dialog("Confirm", Text("Modal body"), close))
 	view.Step()
-	clickElement(view, close)
+	clickElement(view, view.Document.live.dialog.children[0].children[1])
 	if view.Document.live.dialog != nil {
-		t.Fatal("dialog action did not close modal")
+		t.Fatal("default close icon did not close modal")
+	}
+	drawer := Drawer("Drawer", Text("Panel"))
+	view.Document.ShowDrawer(drawer)
+	view.Step()
+	x, y := drawer.rect.W/2, drawer.rect.Y+16
+	view.Send(fego.Event{Kind: fego.PointerDown, X: x, Y: y, Button: 1})
+	view.Send(fego.Event{Kind: fego.PointerMove, X: x, Y: y + 55})
+	if drawer.rect.Y < y+32 {
+		t.Fatal("drawer did not follow the pointer")
+	}
+	view.Send(fego.Event{Kind: fego.PointerUp, X: x, Y: y + 55, Button: 1})
+	if view.Document.live.dialog != nil {
+		t.Fatal("drawer was not swiped away")
 	}
 }
 

@@ -30,8 +30,9 @@ func (r *RangeSliderView) SetRange(low, high float64) *RangeSliderView {
 	}
 	high = max(r.minimum, min(r.maximum, high))
 	if r.high != high {
+		previous := r.high
 		r.high = high
-		r.touch(false)
+		r.damageValue(previous, high)
 	}
 	r.SetValue(low)
 	return r

@@ -100,3 +100,36 @@ func TestTransparentBorderLeavesBackgroundVisible(t *testing.T) {
 		t.Fatal("transparent border painted a fill", got)
 	}
 }
+
+func TestNotificationActionExpiryAndLocalPaint(t *testing.T) {
+	tester := &Tester{Width: 800, Height: 500, Scale: 1}
+	host := &delayedHost{Tester: tester}
+	tester.Document = View(Text("Content"))
+	tester.Document.Mount(host)
+	tester.Step()
+	defer tester.Close()
+	doc, v := tester.Document, tester.Document.live
+	doc.ShowToast("Saved")
+	opened := false
+	doc.ShowNotification("Project created", "Workspace", ToastAction{Label: "Open", Run: func() { opened = true }})
+	tester.Step()
+	if v.toastCount != 2 || v.toastButton() == nil || host.pending == nil {
+		t.Fatal("notification did not preserve the older toast and attach its action")
+	}
+	for _, region := range tester.Damage() {
+		if region.Min.X <= 0 || region.Min.Y <= 0 {
+			t.Fatalf("toast repainted the whole viewport: %v", region)
+		}
+	}
+	tester.Key("Tab", false, false)
+	tester.Key("Enter", false, false)
+	if !opened || v.toastCount != 1 || v.toastButton() != nil {
+		t.Fatal("toast keyboard action failed or cleared unrelated notifications")
+	}
+	v.toasts[0].expires = time.Now().Add(-time.Millisecond)
+	host.pending()
+	tester.Step()
+	if v.toastCount != 0 || v.toastCancel != nil {
+		t.Fatal("expired toast retained a notification or timer")
+	}
+}

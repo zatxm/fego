@@ -60,6 +60,14 @@ func TestVirtualListRetainsVisibleRowsAndSelectsByKey(t *testing.T) {
 	if list.rows[4] != initial {
 		t.Fatal("visible row was replaced across scrolling")
 	}
+	if initial.widget != &noWidget {
+		t.Fatal("row wrapper allocated an independent widget state")
+	}
+	initial.children[0].Height(88)
+	test.Send(fego.Event{Kind: fego.Scroll, X: 300, Y: 160, DY: 1})
+	if initial.measuredHeight != 88 || list.top(5)-list.top(4) != 88 {
+		t.Fatal("pending layout reused a stale row height while scrolling")
+	}
 	list.ScrollTo(14)
 	test.Step()
 	if a, b := list.Visible(); a != 14 || b < 16 {
@@ -79,6 +87,40 @@ func TestVirtualListRetainsVisibleRowsAndSelectsByKey(t *testing.T) {
 	test.Step()
 	if len(list.rows) > 25 || calls > 55 {
 		t.Fatalf("built %d and retained %d rows", calls, len(list.rows))
+	}
+}
+
+func TestVirtualListCompactsMeasurementsAfterShrink(t *testing.T) {
+	const retained = 24
+	headers := make([]int, 128)
+	for i := range headers {
+		headers[i] = i * 4
+	}
+	list := VirtualList(VirtualListOptions{Count: 1024, EstimatedHeight: 36, MultiSelect: true, Headers: headers}, func(int) *Element {
+		return Text("Row")
+	})
+	keys := make([]int, 1024)
+	for i := range keys {
+		keys[i] = i
+		list.measure(i, 32+float32(i%7)/4)
+	}
+	list.SetSelectedKeys(keys...)
+	var offsets [retained + 1]float64
+	for i := range offsets {
+		offsets[i] = list.top(i)
+	}
+	list.SetCount(retained, false)
+	if len(list.heights) != retained || len(list.chosen) != retained || cap(list.options.Headers) > 8 {
+		t.Fatal("shrinking the collection did not compact retained state")
+	}
+	for i, offset := range offsets {
+		if list.top(i) != offset || list.index(float32(offset)) != i {
+			t.Fatalf("row %d moved or lost its measured height", i)
+		}
+	}
+	list.SetCount(0, false)
+	if list.heights != nil || list.sums != nil || list.options.Headers != nil || list.chosen != nil {
+		t.Fatal("empty list retained its measurements, headers or index selections")
 	}
 }
 
@@ -120,12 +162,21 @@ func TestCommandPaletteRunsKeyboardMatch(t *testing.T) {
 	doc := View(root)
 	ran := false
 	root.Append(CommandPalette(doc, "Actions", Command{
+		Label: "Open files", Keywords: "Settings", Action: func() { t.Error("ran the first result instead of the highlighted one") },
+	}, Command{
 		Label: "Open preferences", Keywords: "Settings", Action: func() { ran = true },
 	}))
 	test := NewDocumentTester(doc, 480, 320)
 	defer test.Close()
 	test.Click(10, 10)
+	test.Type("missing")
+	test.Key("Enter", false, false)
+	if doc.live.dialog == nil {
+		t.Fatal("empty search results closed the palette")
+	}
+	test.Key("a", false, true)
 	test.Type("settings")
+	test.Key("ArrowDown", false, false)
 	test.Key("Enter", false, false)
 	if !ran || doc.live.dialog != nil {
 		t.Fatal("keyboard did not invoke and dismiss the palette")

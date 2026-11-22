@@ -2,22 +2,13 @@ package ui
 
 import (
 	"image"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/zatxm/fego/v26"
 )
-
-type popup struct {
-	owner    *Element
-	options  []string
-	selected int
-	first    int
-	choose   func(int)
-	rect     Rect
-}
 
 func (v *view) forget(subtree *Element) {
 	inside := func(e *Element) bool {
@@ -39,6 +30,7 @@ func (v *view) forget(subtree *Element) {
 	}
 	if inside(v.hover) {
 		v.hover = nil
+		v.hoveredRow = -1
 		v.host.SetCursor("default")
 	}
 	if inside(v.tip.target) {
@@ -46,8 +38,10 @@ func (v *view) forget(subtree *Element) {
 		v.tip.target = nil
 	}
 	if v.popup != nil && inside(v.popup.owner) {
-		v.popup = nil
-		v.invalidate(v.root, false)
+		v.closePopup()
+	}
+	if v.popover.owner != nil && inside(v.popover.owner) {
+		v.closePopover()
 	}
 }
 
@@ -56,7 +50,7 @@ func (e *Element) interactive() bool {
 	case kButton, kInput, kEditor, kCheck, kRadio, kSwitch, kSlider, kSelect, kList, kTable, kTree, kVirtualList:
 		return true
 	case kVirtualRow:
-		return e.parent != nil && !e.parent.virtual.header(e.selected)
+		return e.parent != nil && !e.parent.virtual.header(int(e.rowIndex))
 	}
 	return e.onClick != nil || e.onLink != nil || e.onPoint != nil
 }
@@ -114,6 +108,15 @@ func (v *view) input(ev fego.Event) {
 	if v.popup != nil && v.popupInput(ev, x, y) {
 		return
 	}
+	root = v.popoverRoot(root, ev, x, y)
+	if v.dialog == nil {
+		if action := v.toastButton(); action != nil && action.clip.contains(x, y) {
+			root = action
+		}
+	}
+	if v.dialogPlacement == bottomPanel && v.dialog != nil && v.dragDrawer(ev, x, y) {
+		return
+	}
 	switch ev.Kind {
 	case fego.PointerMove:
 		if v.scrollDrag != nil {
@@ -127,14 +130,15 @@ func (v *view) input(ev fego.Event) {
 		if e != v.hover {
 			old := v.hover
 			v.hover = e
+			v.hoveredRow = -1
 			if old != nil {
 				if old.onHover != nil {
 					old.onHover(-1, -1)
 				}
-				v.invalidate(old, false)
+				v.repaint(old, false)
 			}
 			if e != nil {
-				v.invalidate(e, false)
+				v.repaint(e, false)
 			}
 			cursor := "default"
 			if e != nil {
@@ -146,15 +150,30 @@ func (v *view) input(ev fego.Event) {
 			}
 			v.host.SetCursor(cursor)
 		}
-		if e != nil && e.onHover != nil {
-			e.onHover(x-e.rect.X, y-e.rect.Y)
+		if e != nil {
+			if e.onHover != nil {
+				e.onHover(x-e.rect.X, y-e.rect.Y)
+			}
+			if e.kind == kTable || e.style.tone == commandSurface || e.style.tone == suggestionSurface {
+				next := -1
+				bodyY := e.rect.Y + e.headerHeight()
+				if y >= bodyY {
+					i := int((y - bodyY + e.scroll) / e.rowHeight())
+					if i < e.rowCount() {
+						next = i
+					}
+				}
+				v.updateHoveredRow(e, next)
+			}
 		}
 		if e := v.pressed; e != nil {
 			if e.kind == kSlider {
 				v.slide(e, x)
 			} else if e.kind == kInput || e.kind == kEditor {
-				e.own().cursor = v.textPosition(e, x, y)
-				v.invalidate(e, false)
+				if cursor := v.textPosition(e, x, y); cursor != e.cursor {
+					e.own().cursor = cursor
+					v.invalidate(e, false)
+				}
 			}
 		}
 	case fego.PointerDown:
@@ -220,7 +239,7 @@ func (v *view) input(ev fego.Event) {
 		v.scrollDrag = nil
 		if e := v.pressed; e != nil {
 			v.pressed = nil
-			v.invalidate(e, false)
+			v.repaint(e, false)
 		}
 	case fego.PointerUp:
 		if ev.Button != 1 {
@@ -233,7 +252,7 @@ func (v *view) input(ev fego.Event) {
 		e := v.pressed
 		v.pressed = nil
 		if e != nil {
-			v.invalidate(e, false)
+			v.repaint(e, false)
 			if e.kind == kVirtualRow && e.parent != nil {
 				l := e.parent.virtual
 				if l.options.Reorder != nil && l.clip.contains(x, y) &&
@@ -243,9 +262,9 @@ func (v *view) input(ev fego.Event) {
 					if before < l.options.Count && float64(pos) > (l.top(before)+l.top(before+1))/2 {
 						before++
 					}
-					l.drop(e.selected, before)
+					l.drop(int(e.rowIndex), before)
 				} else if e == hit(root, x, y) {
-					l.click(e.selected, ev)
+					l.click(int(e.rowIndex), ev)
 				}
 				break
 			}
@@ -270,11 +289,14 @@ func (v *view) input(ev fego.Event) {
 			return
 		}
 		if ev.Key == "Escape" {
-			if v.dialog != nil {
+			if v.popover.content != nil {
+				trigger := v.popover.trigger
+				v.closePopover()
+				v.focus(trigger)
+			} else if v.dialog != nil {
 				v.doc.CloseDialog()
-			} else if v.toast != "" {
-				v.toast = ""
-				v.invalidate(v.root, false)
+			} else {
+				v.clearToasts()
 			}
 			return
 		}
@@ -283,7 +305,11 @@ func (v *view) input(ev fego.Event) {
 			return
 		}
 		if e.kind == kInput || e.kind == kEditor {
-			v.editKey(e, ev)
+			if e.onNavigate != nil && (ev.Key == "ArrowUp" || ev.Key == "ArrowDown") {
+				e.onNavigate(ev.Key)
+			} else {
+				v.editKey(e, ev)
+			}
 			return
 		}
 		if e.kind == kSlider && e.interval != nil && e.interval.key(ev) {
@@ -330,6 +356,60 @@ func (v *view) input(ev fego.Event) {
 	}
 }
 
+func (v *view) dragDrawer(ev fego.Event, x, y float32) bool {
+	panel := v.dialog
+	base := float32(v.size.Dy())/v.scale - panel.rect.H
+	move := func(top float32) {
+		if panel.rect.Y == top {
+			return
+		}
+		v.invalidate(panel, false)
+		v.moveLayout(panel, top, Rect{W: float32(v.size.Dx()) / v.scale, H: float32(v.size.Dy()) / v.scale})
+		v.invalidate(panel, false)
+	}
+	if !v.drawerDragging {
+		if ev.Kind == fego.PointerDown && ev.Button == 1 &&
+			(Rect{panel.rect.X + (panel.rect.W-112)/2, panel.rect.Y, 112, 32}).contains(x, y) {
+			v.drawerDragging = true
+			v.drawerOrigin = y
+			return true
+		}
+		return false
+	}
+	switch ev.Kind {
+	case fego.PointerMove:
+		move(base + max(0, y-v.drawerOrigin))
+	case fego.PointerUp:
+		v.drawerDragging = false
+		if y-v.drawerOrigin >= 48 {
+			v.doc.CloseDialog()
+		} else {
+			move(base)
+		}
+	case fego.PointerCancel:
+		v.drawerDragging = false
+		move(base)
+	default:
+		return false
+	}
+	return true
+}
+
+func (v *view) updateHoveredRow(e *Element, next int) {
+	if next == v.hoveredRow {
+		return
+	}
+	for _, i := range [...]int{v.hoveredRow, next} {
+		if i >= 0 {
+			y := e.rect.Y + e.headerHeight() + float32(i)*e.rowHeight() - e.scroll
+			v.damage(Rect{e.rect.X, y, e.rect.W, e.rowHeight()}.intersect(e.clip).pixels(v.scale))
+		}
+	}
+	v.hoveredRow = next
+	v.scrolling = nil
+	v.host.Invalidate()
+}
+
 func scrollbar(e *Element) (track, thumb Rect) {
 	if !e.scrollable && e.kind != kVirtualList && e.rowCount() == 0 {
 		return
@@ -351,6 +431,9 @@ func (v *view) dragScroll(y float32) {
 func (v *view) focus(e *Element) {
 	if e != nil && !v.available(e) {
 		e = nil
+	}
+	if p := v.popover; p.content != nil && e != nil && !within(e, p.content) && !within(e, p.owner) {
+		v.closePopover()
 	}
 	if v.focused == e {
 		return
@@ -386,7 +469,7 @@ func (v *view) setFocusVisible(visible bool) {
 	if v.focusVisible != visible {
 		v.focusVisible = visible
 		if v.focused != nil {
-			v.invalidate(v.focused, false)
+			v.repaint(v.focused, false)
 		}
 	}
 }
@@ -401,6 +484,12 @@ func (v *view) available(e *Element) bool {
 			return false
 		}
 		root = p
+	}
+	if root == v.popover.content {
+		return v.available(v.popover.owner)
+	}
+	if root == v.toastButton() {
+		return v.dialog == nil
 	}
 	if v.dialog != nil {
 		return root == v.dialog
@@ -420,12 +509,18 @@ func (v *view) focusNext(back bool) {
 		for _, c := range e.children {
 			walk(c)
 		}
+		if e == v.popover.owner {
+			walk(v.popover.content)
+		}
 	}
 	r := v.root
 	if v.dialog != nil {
 		r = v.dialog
 	}
 	walk(r)
+	if action := v.toastButton(); action != nil && v.dialog == nil {
+		walk(action)
+	}
 	if len(list) == 0 {
 		return
 	}
@@ -461,12 +556,7 @@ func (v *view) activate(e *Element, x, y float32) {
 			e.onToggle(e.checked)
 		}
 	case kSelect:
-		v.openPopup(e, e.options, e.selected, func(i int) {
-			e.SetSelected(i)
-			if e.onSelect != nil {
-				e.onSelect(i)
-			}
-		})
+		v.openPopup(e, nil)
 	case kList, kTree, kTable:
 		if e.kind == kTable && y < e.rect.Y+e.headerHeight() {
 			v.sortTable(e, x)
@@ -571,15 +661,7 @@ func (v *view) navigate(e *Element, key string) {
 		}
 		i = max(0, min(n-1, i))
 		e.SetSelected(i)
-		top := float32(i) * e.rowHeight()
-		bottom := top + e.rowHeight()
-		height := e.rect.H - e.headerHeight()
-		if top < e.scroll {
-			e.scroll = top
-		} else if bottom > e.scroll+height {
-			e.scroll = bottom - height
-		}
-		e.scroll = max(0, min(e.scroll, e.maxScroll()))
+		e.revealRow(i)
 		if e.onSelect != nil {
 			index := i
 			if e.kind == kTable && len(e.order) > 0 {
@@ -589,6 +671,18 @@ func (v *view) navigate(e *Element, key string) {
 		}
 	}
 }
+func (e *Element) revealRow(i int) {
+	top := float32(i) * e.rowHeight()
+	bottom := top + e.rowHeight()
+	height := e.rect.H - e.headerHeight()
+	if top < e.scroll {
+		e.scroll = top
+	} else if bottom > e.scroll+height {
+		e.scroll = bottom - height
+	}
+	e.scroll = max(0, min(e.scroll, e.maxScroll()))
+}
+
 func (v *view) slide(e *Element, x float32) {
 	f := max(0, min(1, (x-e.rect.X-8)/max(1, e.rect.W-16)))
 	old := e.value
@@ -605,12 +699,17 @@ func (v *view) slide(e *Element, x float32) {
 func (v *view) sortTable(e *Element, x float32) {
 	col := 0
 	left := e.rect.X
-	for i := range e.columns {
-		if x < left+v.columnWidth(e, i) {
+	flex := flexibleColumnWidth(e)
+	for i, column := range e.columns {
+		width := column.Width
+		if width <= 0 {
+			width = flex
+		}
+		if x < left+width {
 			col = i
 			break
 		}
-		left += v.columnWidth(e, i)
+		left += width
 	}
 	if len(e.order) != len(e.rows) {
 		e.own().order = make([]int, len(e.rows))
@@ -628,12 +727,12 @@ func (v *view) sortTable(e *Element, x float32) {
 	if len(e.order) > 1 {
 		ascending = value(e.order[0]) > value(e.order[len(e.order)-1])
 	}
-	sort.SliceStable(e.order, func(i, j int) bool {
-		a, b := value(e.order[i]), value(e.order[j])
-		if ascending {
-			return a < b
+	slices.SortStableFunc(e.order, func(i, j int) int {
+		a, b := value(i), value(j)
+		if !ascending {
+			a, b = b, a
 		}
-		return a > b
+		return strings.Compare(a, b)
 	})
 	e.own().selected = -1
 	e.touch(false)
@@ -641,6 +740,11 @@ func (v *view) sortTable(e *Element, x float32) {
 func (v *view) inputInner(e *Element) Rect {
 	r := e.rect
 	inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
+	if !e.multiline {
+		line := v.text.LineHeight(v.font(e), false)
+		inner.Y = r.Y + (r.H-line)/2
+		inner.H = line
+	}
 	if e.kind == kEditor {
 		inner.X += 40
 		inner.W -= 40
@@ -649,7 +753,7 @@ func (v *view) inputInner(e *Element) Rect {
 }
 func (v *view) textPosition(e *Element, x, y float32) int {
 	if e.otpLength > 0 {
-		return min(len(e.text), max(0, int((x-e.rect.X)/max(1, e.otpSlot(0).W+3))))
+		return min(len(e.text), max(0, int((x-e.rect.X)/max(1, e.otpSlot(0).W))))
 	}
 	inner := v.inputInner(e)
 	font := v.font(e)
@@ -819,7 +923,7 @@ func (v *view) edited(e *Element) {
 			e.scroll = min(e.maxScroll(), e.scroll+y+v.text.LineHeight(v.font(e), false)-inner.Y-inner.H)
 		}
 	}
-	e.touch(false)
+	e.touchInputText()
 	v.updateCaret()
 	if e.onChange != nil {
 		e.onChange(e.text)
@@ -974,113 +1078,5 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 			e.touch(false)
 		}
 		v.updateCaret()
-	}
-}
-
-func (v *view) openPopup(owner *Element, options []string, selected int, choose func(int)) {
-	if len(options) == 0 {
-		return
-	}
-	r := owner.rect
-	h := min(float32(len(options))*34+8, float32(360))
-	w := max(r.W, 160)
-	screenW, screenH, _ := v.host.Size()
-	w = min(w, max(1, float32(screenW)/v.scale-16))
-	h = min(h, max(1, float32(screenH)/v.scale-16))
-	r = Rect{min(r.X, float32(screenW)/v.scale-w-8), r.Y + r.H + 6, w, h}
-	if r.Y+r.H > float32(screenH)/v.scale {
-		r.Y = owner.rect.Y - h - 6
-	}
-	r.X = max(8, r.X)
-	r.Y = max(8, r.Y)
-	v.popup = &popup{owner: owner, options: options, selected: max(0, selected), choose: choose, rect: r}
-	v.popup.reveal()
-	v.invalidate(v.root, false)
-}
-func (v *view) popupInput(ev fego.Event, x, y float32) bool {
-	p := v.popup
-	close := func() { v.popup = nil; v.invalidate(v.root, false) }
-	choose := func() { i := p.selected; close(); p.choose(i) }
-	switch ev.Kind {
-	case fego.KeyDown:
-		switch ev.Key {
-		case "Escape", "Tab":
-			close()
-		case "ArrowDown":
-			p.selected = (p.selected + 1) % len(p.options)
-			p.reveal()
-			v.invalidate(v.root, false)
-		case "ArrowUp":
-			p.selected = (p.selected - 1 + len(p.options)) % len(p.options)
-			p.reveal()
-			v.invalidate(v.root, false)
-		case "Enter", "Space":
-			choose()
-		}
-		return true
-	case fego.PointerDown:
-		if !p.rect.contains(x, y) {
-			close()
-		}
-		return true
-	case fego.PointerMove:
-		if p.rect.contains(x, y) {
-			p.selected = max(0, min(len(p.options)-1, p.first+int((y-p.rect.Y-4)/34)))
-			v.invalidate(v.root, false)
-		}
-		return true
-	case fego.PointerUp:
-		if p.rect.contains(x, y) {
-			p.selected = max(0, min(len(p.options)-1, p.first+int((y-p.rect.Y-4)/34)))
-			choose()
-		}
-		return true
-	case fego.Scroll:
-		rows := max(1, int((p.rect.H-8)/34))
-		step := int(ev.DY / 34)
-		if step == 0 && ev.DY != 0 {
-			if ev.DY > 0 {
-				step = 1
-			} else {
-				step = -1
-			}
-		}
-		p.first = max(0, min(max(0, len(p.options)-rows), p.first+step))
-		v.invalidate(v.root, false)
-		return true
-	case fego.Text:
-		return true
-	}
-	return false
-}
-func (v *view) paintPopup(p *Painter) {
-	menu := v.popup
-	t := v.theme
-	r := menu.rect
-	p.Shadow(r, 10)
-	p.RoundRect(r, 10, t.Border)
-	p.RoundRect(Rect{r.X + 1, r.Y + 1, r.W - 2, r.H - 2}, 9, t.Surface)
-	clip := p.clip
-	p.clip = p.clip.Intersect(r.pixels(v.scale))
-	defer func() { p.clip = clip }()
-	first := menu.first
-	for i := first; i < len(menu.options); i++ {
-		y := r.Y + 4 + float32(i-first)*34
-		if y > r.Y+r.H-4 {
-			break
-		}
-		if i == menu.selected {
-			p.RoundRect(Rect{r.X + 5, y, r.W - 10, 32}, 6, t.Raised)
-		}
-		p.Label(menu.options[i], r.X+14, y+8, v.theme.FontSize, t.Text, false)
-	}
-}
-
-func (p *popup) reveal() {
-	rows := max(1, int((p.rect.H-8)/34))
-	if p.selected < p.first {
-		p.first = p.selected
-	} else if p.selected >= p.first+rows {
-		p.first = p.selected - rows + 1
 	}
 }

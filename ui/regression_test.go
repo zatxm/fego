@@ -275,10 +275,40 @@ func TestOversizedInputRejectedBeforeRuneAllocation(t *testing.T) {
 
 type accessibleHost struct {
 	*Tester
-	nodes []fego.AccessNode
+	nodes   []fego.AccessNode
+	updates int
 }
 
-func (h *accessibleHost) SetAccessibility(nodes []fego.AccessNode) { h.nodes = nodes }
+func (h *accessibleHost) SetAccessibility(nodes []fego.AccessNode) {
+	h.nodes = nodes
+	h.updates++
+}
+
+func TestHoverPaintDoesNotRepublishAccessibility(t *testing.T) {
+	button := Button("Hover", nil)
+	slider := Slider(10, 0, 100)
+	doc := View(Column(button, slider))
+	host := &accessibleHost{Tester: &Tester{Document: doc, Width: 380, Height: 150, Scale: 1}}
+	doc.Mount(host)
+	doc.live.frame(false)
+	defer host.Close()
+	updates, frames := host.updates, doc.Stats().Frames
+	host.Send(fego.Event{Kind: fego.PointerMove, X: 20, Y: 12})
+	if doc.Stats().Frames == frames || host.updates != updates {
+		t.Fatal("visual hover failed to paint without publishing the accessibility tree")
+	}
+	slider.SetValue(42)
+	host.Step()
+	if host.updates != updates+1 {
+		t.Fatal("partial slider repaint did not publish the new value")
+	}
+	for _, node := range host.nodes {
+		if node.ID == slider.id && node.Number == 42 {
+			return
+		}
+	}
+	t.Fatal("accessibility slider value stayed stale")
+}
 
 func TestAccessibilityActionsPrivacyAndModalBoundary(t *testing.T) {
 	clicks := 0

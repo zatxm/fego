@@ -120,12 +120,14 @@ Create trays and update their menus on the UI thread. From worker goroutines, us
 | Layout | Box, Row, Column, Grid, Card, ScrollView, spacing, padding, sizing, and alignment |
 | Basic widgets | Text, RichText, Button, PrimaryButton, Checkbox, Radio, Switch, Separator, Image |
 | Forms | TextInput, TextArea, password fields, Field, Form, Select, ComboBox, Autocomplete, SearchField, MultiSelect, TokenField, InputGroup, InputOTP, NumberInput, Stepper, DecimalInput, TimeInput, ColorPicker, Slider, RangeSlider, Rating, Progress |
-| Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Sidebar, CommandPalette, Pagination, Menu, Dropdown, SplitButton, Dialog, Drawer, Toast, Badge, Avatar |
+| Navigation and feedback | Tabs, Segmented, Accordion, Breadcrumbs, Sidebar, CommandPalette, Pagination, Menu, Dropdown, SplitButton, Dialog, Sheet, Drawer, Toast, Badge, Avatar |
 | Data | List, VirtualList, Table with column sorting, Tree with expand/collapse, LineChart, BarChart, AreaChart, StackedBarChart, PieChart |
 | Dates and documents | Calendar, DatePicker, CodeEditor, Editor, MarkdownEditor, Diff, Merge |
 | Drawing and media | Canvas, Painter, Path, EaseInOut, Spring, Keyframes, Timeline, Video, optional GPU presentation and GLSL shaders |
 | Input | Mouse, scrolling, Tab and arrow keys, Unicode, selection, clipboard, undo, system input method text commits |
 | Accessibility | Linux AT-SPI, Windows MSAA, macOS NSAccessibility, browser ARIA |
+
+Use `Sheet` with `Document.ShowSheet` for a right-side panel. Use `Drawer` with `Document.ShowDrawer` for a bottom panel that you can drag down to dismiss.
 
 ## Updating state and layout
 

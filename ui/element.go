@@ -53,6 +53,14 @@ const (
 	mutedSurface
 	primarySurface
 	primaryText
+	subtleSurface
+	groupSurface
+	commandSurface
+	sheetSurface
+	suggestionSurface
+	segmentSurface
+	drawerSurface
+	dialogSurface
 )
 
 type Align uint8
@@ -118,64 +126,69 @@ type style struct {
 	bgSet, fgSet, borderSet, bold, fillW, fillH, card, clip bool
 	dir                                                     direction
 	tone                                                    tone
+	button                                                  buttonStyle
+	icon                                                    controlIcon
 	columns                                                 int
 }
 
 // Element is owned by one view. Mutate it on the UI thread; use Window.Update
 // when data arrives from a goroutine. Children cannot be shared between parents.
 type Element struct {
-	id               uint64
-	kind             kind
-	layoutY          float32
-	style            style
-	parent           *Element
-	children         []*Element
-	view             *view
-	rect, clip       Rect
-	text, label      string
-	tooltip          string
-	disabled, hidden bool
-	onClick          func()
-	scroll, contentH float32
-	scrollable       bool
-	*widget          // control state; layout-only elements share noWidget
+	id                        uint64
+	kind                      kind
+	layoutY                   float32
+	style                     style
+	parent                    *Element
+	children                  []*Element
+	view                      *view
+	rect, clip                Rect
+	text, label               string
+	tooltip                   string
+	disabled, hidden, primary bool
+	measuredHeight            float32 // retained virtual row
+	onClick                   func()
+	scroll, contentH          float32
+	scrollable                bool
+	rowIndex                  int32 // retained virtual row
+	*widget                         // control state; layout-only elements share noWidget
 }
 
 // widget holds state used by controls but not by plain boxes and labels.
 type widget struct {
-	editor                                     *editorState
-	placeholder                                string
-	primary, checked, multiline, password, tab bool
-	value, minimum, maximum                    float64
-	selected                                   int
-	options                                    []string
-	count                                      int
-	rowText                                    func(int) string
-	columns                                    []ColumnDef
-	rows                                       [][]string
-	order                                      []int
-	tree                                       []*TreeNode
-	visibleTree                                []treeRow
-	expanded                                   map[*TreeNode]bool
-	spans                                      []Span
-	bitmap                                     image.Image
-	draw                                       func(*Painter)
-	onPoint                                    func(float32, float32)
-	onHover                                    func(float32, float32)
-	onNavigate                                 func(string)
-	onChange                                   func(string)
-	onToggle                                   func(bool)
-	onValue                                    func(float64)
-	onSelect                                   func(int)
-	onLink                                     func(string)
-	scrollX                                    float32
-	cursor, anchor                             int
-	undo                                       []textUndo
-	undoBytes                                  int
-	virtual                                    *VirtualListView
-	interval                                   *RangeSliderView
-	submit                                     func()
-	otpLength                                  int
+	editor                                    *editorState
+	placeholder                               string
+	checked, multiline, password, currentPage bool
+	pagination                                pageControl
+	value, minimum, maximum                   float64
+	selected                                  int
+	options                                   []string
+	count                                     int
+	rowText                                   func(int) string
+	columns                                   []ColumnDef
+	rows                                      [][]string
+	order                                     []int
+	tree                                      []*TreeNode
+	visibleTree                               []treeRow
+	expanded                                  map[*TreeNode]bool
+	spans                                     []Span
+	bitmap                                    image.Image
+	draw                                      func(*Painter)
+	onPoint                                   func(float32, float32)
+	onHover                                   func(float32, float32)
+	onNavigate                                func(string)
+	onChange                                  func(string)
+	onToggle                                  func(bool)
+	onValue                                   func(float64)
+	onSelect                                  func(int)
+	onLink                                    func(string)
+	scrollX                                   float32
+	cursor, anchor                            int
+	undo                                      []textUndo
+	undoBytes                                 int
+	virtual                                   *VirtualListView
+	interval                                  *RangeSliderView
+	submit                                    func()
+	otpLength                                 int
 }
 
 // noWidget is read-only; own gives an element private state before any write.
@@ -192,7 +205,7 @@ var elementIDs atomic.Uint64
 
 func element(k kind) *Element {
 	e := &Element{id: elementIDs.Add(1) << 32, kind: k, style: style{radius: 8, align: Stretch}, widget: &noWidget}
-	if k != kBox && k != kText && k != kSeparator {
+	if k != kBox && k != kText && k != kSeparator && k != kButton && k != kVirtualRow {
 		e.widget = &widget{selected: -1}
 	}
 	return e
@@ -215,7 +228,7 @@ func Grid(columns int, children ...*Element) *Element {
 	return e
 }
 func Card(children ...*Element) *Element {
-	e := Column(children...).Padding(20).Radius(12)
+	e := Column(children...).Padding(24).Radius(14).Gap(24)
 	e.style.card = true
 	return e
 }
@@ -228,14 +241,14 @@ func ScrollView(content *Element) *Element {
 }
 func Text(s string) *Element { e := element(kText); e.text = s; return e }
 func Button(s string, click func()) *Element {
-	e := element(kButton)
+	e := element(kButton).Radius(8)
 	e.text = s
 	e.onClick = click
 	return e
 }
 func PrimaryButton(s string, click func()) *Element {
 	e := Button(s, click)
-	e.own().primary = true
+	e.primary = true
 	return e
 }
 func TextInput(s string) *Element {
@@ -316,6 +329,8 @@ func Tree(nodes ...*TreeNode) *Element {
 	return e.Height(240)
 }
 func Image(img image.Image) *Element { e := element(kImage); e.own().bitmap = img; return e }
+
+// Canvas invokes draw with a painter valid for the duration of the callback.
 func Canvas(width, height float32, draw func(*Painter)) *Element {
 	e := element(kCanvas)
 	e.own().draw = draw
@@ -416,6 +431,16 @@ func (e *Element) listText(row int) string {
 	return label
 }
 
+func (e *Element) clearRowLabels() {
+	if e.view != nil {
+		for id := range e.view.rowLabels {
+			if id[0] == e.id {
+				delete(e.view.rowLabels, id)
+			}
+		}
+	}
+}
+
 // Reuse the accessible label even when a table's caller edits a supplied slice.
 func matchesRowLabel(label string, cells []string) bool {
 	for i, cell := range cells {
@@ -468,16 +493,60 @@ func (e *Element) SetText(s string) *Element {
 			}
 			e.own().scrollX = 0
 		}
-		e.touch(layout)
+		if e.kind == kInput {
+			e.touchInputText()
+		} else {
+			e.touch(layout)
+		}
 	}
 	return e
 }
 func (e *Element) Text() string { return e.text }
-func (e *Element) SetChecked(v bool) *Element {
-	if e.checked != v {
-		e.own().checked = v
-		e.touch(false)
+
+func (e *Element) touchInputText() {
+	v := e.view
+	if v == nil {
+		return
 	}
+	if e.kind != kInput || e.multiline || e.otpLength > 0 || v.needsLayout || v.size.Empty() {
+		e.touch(false)
+		return
+	}
+	// The input's border and background are independent of its text.
+	v.accessDirty = true
+	v.scrolling = nil
+	v.damage(v.inputInner(e).intersect(e.clip).pixels(v.scale))
+	v.host.Invalidate()
+}
+
+func (e *Element) SetChecked(checked bool) *Element {
+	if e.checked == checked {
+		return e
+	}
+	e.own().checked = checked
+	v := e.view
+	if v == nil {
+		return e
+	}
+	r := e.rect
+	switch e.kind {
+	case kCheck, kRadio:
+		r = Rect{r.X, r.Y + r.H/2 - 8, 16, 16}
+	case kSwitch:
+		r = switchTrack(r)
+	default:
+		e.touch(false)
+		return e
+	}
+	damage := r.intersect(e.clip).pixels(v.scale)
+	if damage.Empty() {
+		e.touch(false)
+		return e
+	}
+	v.accessDirty = true
+	v.scrolling = nil
+	v.damage(damage)
+	v.host.Invalidate()
 	return e
 }
 func (e *Element) Checked() bool { return e.checked }
@@ -492,8 +561,8 @@ func (e *Element) SetValue(v float64) *Element {
 	if e.value != v {
 		previous := e.value
 		e.own().value = v
-		if e.view != nil && (e.kind == kProgress || e.kind == kSlider && e.interval == nil) {
-			e.damageValue(previous)
+		if e.kind == kProgress || e.kind == kSlider {
+			e.damageValue(previous, v)
 		} else {
 			e.touch(false)
 		}
@@ -502,23 +571,29 @@ func (e *Element) SetValue(v float64) *Element {
 }
 
 // Only the moving thumb and the changed end of the filled track need painting.
-func (e *Element) damageValue(previous float64) {
+func (e *Element) damageValue(previous, value float64) {
 	v, r := e.view, e.rect
+	if v == nil {
+		return
+	}
 	if v.size.Empty() || v.needsLayout || r.W <= 16 || v.scale < 1 {
 		e.touch(false)
 		return
 	}
-	from, to := r.X+float32(previous)*r.W, r.X+float32(e.value)*r.W
+	from, to := r.X+float32(previous)*r.W, r.X+float32(value)*r.W
 	margin := r.H/2 + 2
 	if e.kind == kSlider {
 		from = r.X + 8 + sliderFraction(e, previous)*(r.W-16)
-		to = r.X + 8 + sliderFraction(e, e.value)*(r.W-16)
+		to = r.X + 8 + sliderFraction(e, value)*(r.W-16)
 		margin = 10
+		r.Y += max(0, r.H/2-margin)
+		r.H = min(r.H, margin*2)
 	} else if min(from, to)-r.X < r.H {
 		// The radius of a short fill also changes its left cap.
 		from, to = r.X, max(from, to)
 	}
 	start, end := min(from, to)-margin, max(from, to)+margin
+	v.accessDirty = true
 	v.scrolling = nil
 	v.damage(Rect{start, r.Y, end - start, r.H}.pixels(v.scale))
 	v.host.Invalidate()
@@ -538,9 +613,7 @@ func (e *Element) SetSelected(i int) *Element {
 func (e *Element) Selected() int { return e.selected }
 func (e *Element) SetRows(rows [][]string) *Element {
 	e.own().rows = rows
-	if e.view != nil {
-		clear(e.view.rowLabels)
-	}
+	e.clearRowLabels()
 	e.own().order = nil
 	e.own().selected = -1
 	e.scroll = 0
@@ -552,9 +625,7 @@ func (e *Element) SetCount(n int) *Element {
 		panic("ui: negative list length")
 	}
 	e.own().count = n
-	if e.view != nil {
-		clear(e.view.rowLabels)
-	}
+	e.clearRowLabels()
 	e.own().selected = min(e.selected, n-1)
 	e.scroll = min(e.scroll, e.maxScroll())
 	e.touch(false)

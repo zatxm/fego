@@ -11,19 +11,59 @@ import (
 
 // Sidebar keeps its navigation and content in two retained columns.
 func Sidebar(navigation, content *Element) *Element {
-	sidebar := Card(navigation).Padding(0).Width(198).FillHeight().Radius(0)
+	sidebar := Column(navigation).Padding(0).Width(256).FillHeight().Radius(0)
 	sidebar.style.tone = sidebarSurface
 	return Row(sidebar, content.Grow(1).FillHeight()).Gap(0)
 }
 
-// Drawer builds the side panel passed to Document.ShowDrawer.
-func Drawer(title string, content *Element, actions ...*Element) *Element {
-	return Dialog(title, content, actions...).Width(360).Radius(0)
+// SetSidebarOpen shows or collapses the navigation column of a Sidebar.
+func (e *Element) SetSidebarOpen(open bool) *Element {
+	if len(e.children) > 0 && e.children[0].style.tone == sidebarSurface {
+		e.children[0].Hidden(!open)
+	}
+	return e
 }
 
-// ShowDrawer opens a modal panel against the right edge of the window.
+// SidebarItem creates a left-aligned navigation control. SetActive highlights the current item.
+func SidebarItem(label string, click func()) *Element {
+	item := Button(label, click).Height(32).FillWidth()
+	item.style.button = sidebarButton
+	return item
+}
+
+// SetActive sets the current state of a sidebar item.
+func (e *Element) SetActive(active bool) *Element {
+	if e.style.button == sidebarButton && e.primary != active {
+		e.primary = active
+		e.touch(false)
+	}
+	return e
+}
+
+// Sheet builds a modal panel for Document.ShowSheet.
+func Sheet(title string, content *Element, actions ...*Element) *Element {
+	sheet := Dialog(title, content, actions...).Width(384).Radius(0)
+	sheet.style.tone = sheetSurface
+	sheet.style.card = false
+	return sheet
+}
+
+// ShowSheet opens a modal panel against the right edge of the window.
+func (d *Document) ShowSheet(panel *Element) {
+	d.showDialog(panel, rightPanel)
+}
+
+// Drawer builds a bottom panel with a drag handle for Document.ShowDrawer.
+func Drawer(title string, content *Element, actions ...*Element) *Element {
+	drawer := Dialog(title, content, actions...).Padding(34, 24, 24, 24).Radius(14)
+	drawer.style.tone = drawerSurface
+	drawer.style.card = false
+	return drawer
+}
+
+// ShowDrawer opens a bottom panel that can be dragged down to dismiss it.
 func (d *Document) ShowDrawer(panel *Element) {
-	d.showDialog(panel, true)
+	d.showDialog(panel, bottomPanel)
 }
 
 type Command struct {
@@ -32,46 +72,56 @@ type Command struct {
 	Action   func()
 }
 
-// CommandPalette opens a searchable collection of actions. Enter invokes the
-// first match from the query field; Tab moves into the results.
+// CommandPalette opens a searchable collection of actions.
 func CommandPalette(doc *Document, title string, commands ...Command) *Element {
 	commands = slices.Clone(commands)
+	keys := make([]string, len(commands))
+	for i, cmd := range commands {
+		keys[i] = strings.ToLower(cmd.Label + " " + cmd.Keywords)
+	}
 	return Button(title, func() {
-		query := TextInput("").Label("Search commands").Placeholder("Search commands")
-		result := Text("No matching commands").FontSize(13).Hidden(true)
+		query := TextInput("").Label("Search commands").Placeholder("Search commands…").Grow(1)
+		result := Text("No matching commands").FontSize(13).Muted().Hidden(true).Padding(16)
+		suggestions := Text("Suggestions").FontSize(12).Muted().Padding(8, 12, 4, 12)
 		matches := make([]int, 0, len(commands))
 		run := func(i int) {
-			cmd := commands[matches[i]]
+			action := commands[matches[i]].Action
 			doc.CloseDialog()
-			cmd.Action()
+			action()
 		}
-		name := func(i int) string { return commands[matches[i]].Label }
-		options := VirtualListOptions{Name: name}
-		list := VirtualList(options, func(i int) *Element {
-			return Button(name(i), func() { run(i) }).Height(36)
-		}).OnSubmit(run)
-		list.Height(216).Label("Commands")
+		list := List(0, func(i int) string { return commands[matches[i]].Label }).Label("Commands").Height(192)
+		list.style.tone = commandSurface
+		list.OnClick(func() {
+			if list.Selected() >= 0 {
+				run(list.Selected())
+			}
+		})
 		update := func(text string) {
 			matches = matches[:0]
 			text = strings.ToLower(strings.TrimSpace(text))
-			for i, cmd := range commands {
-				if cmd.Action != nil && strings.Contains(strings.ToLower(cmd.Label+" "+cmd.Keywords), text) {
+			for i, key := range keys {
+				if commands[i].Action != nil && strings.Contains(key, text) {
 					matches = append(matches, i)
 				}
 			}
-			options.Count = len(matches)
-			list.SetOptions(options)
 			list.scroll = 0
+			list.SetCount(len(matches)).SetSelected(min(0, len(matches)-1))
 			list.Hidden(len(matches) == 0)
 			result.Hidden(len(matches) != 0)
+			suggestions.Hidden(len(matches) == 0)
 		}
 		query.OnChange(update).OnSubmit(func() {
-			if len(matches) != 0 {
-				run(0)
+			if i := list.Selected(); i >= 0 {
+				run(i)
 			}
 		})
+		query.own().onNavigate = func(key string) { list.view.navigate(list, key) }
+		search := Canvas(16, 16, func(p *Painter) { p.icon(searchIcon, 8, 8, p.theme.Muted) })
+		header := Row(search, query, iconButton(closeIcon, "Close", doc.CloseDialog).Size(24, 24)).Padding(0, 12).Gap(0)
+		header.style.tone = commandSurface
+		panel := Card(header, Separator(), suggestions, list, result).Label(title).Width(512).Padding(0).Gap(0).Radius(10)
 		update("")
-		doc.ShowDialog(Dialog(title, Column(query, list.Element, result)))
+		doc.ShowDialog(panel)
 		if doc.live != nil {
 			doc.live.focus(query)
 		}
@@ -104,9 +154,9 @@ func InputOTP(length int, onComplete func(string)) *Element {
 	if length < 1 || length > 12 {
 		panic("ui: OTP length must be between 1 and 12")
 	}
-	e := TextInput("").Label("Verification code").Placeholder(strings.Repeat("·", length))
+	e := TextInput("").Label("Verification code")
 	e.own().otpLength = length
-	return e.Width(float32(34*length + 20)).OnChange(func(value string) {
+	return e.Width(float32(36 * length)).Height(36).OnChange(func(value string) {
 		if len(value) == length && onComplete != nil {
 			onComplete(value)
 		}
@@ -126,8 +176,8 @@ func otpDigits(text string, limit int) string {
 }
 
 func (e *Element) otpSlot(i int) Rect {
-	width := min(34, e.rect.W/float32(e.otpLength))
-	return Rect{e.rect.X + float32(i)*width, e.rect.Y, max(0, width-3), e.rect.H}
+	width := min(36, e.rect.W/float32(e.otpLength))
+	return Rect{e.rect.X + float32(i)*width, e.rect.Y, width, e.rect.H}
 }
 
 // MultiSelect retains selection by option index. The caller receives a sorted copy.
@@ -255,31 +305,6 @@ func SplitButton(label string, action func(), alternatives ...MenuItem) *Element
 	return Row(PrimaryButton(label, action).Grow(1), Menu("▾", alternatives...).Width(36).Label("More "+label+" actions")).Gap(2)
 }
 
-func Pagination(page, pages int, onChange func(int)) *Element {
-	label := Text("")
-	var prev, next *Element
-	set := func(index int) {
-		page = min(max(1, index), max(1, pages))
-		label.SetText(fmt.Sprintf("%d / %d", page, max(1, pages)))
-		prev.Disabled(page <= 1)
-		next.Disabled(page >= pages)
-	}
-	prev = Button("‹", func() {
-		set(page - 1)
-		if onChange != nil {
-			onChange(page)
-		}
-	}).Label("Previous page").Width(36)
-	next = Button("›", func() {
-		set(page + 1)
-		if onChange != nil {
-			onChange(page)
-		}
-	}).Label("Next page").Width(36)
-	set(page)
-	return Row(prev, label, next).Gap(8)
-}
-
 func Rating(value, maximum int, onChange func(int)) *Element {
 	if maximum < 1 || maximum > 20 {
 		panic("ui: rating must have 1 to 20 choices")
@@ -316,11 +341,21 @@ func Stepper(value, minimum, maximum, step float64) *NumberField {
 func InputGroup(input, leading, trailing *Element) *Element {
 	children := make([]*Element, 0, 3)
 	if leading != nil {
+		styleAddon(leading)
 		children = append(children, leading)
 	}
 	children = append(children, input.Grow(1))
 	if trailing != nil {
+		styleAddon(trailing)
 		children = append(children, trailing)
 	}
-	return Row(children...).Gap(4)
+	group := Row(children...).Gap(0).MinHeight(36)
+	group.style.tone = groupSurface
+	return group
+}
+
+func styleAddon(e *Element) {
+	if e.kind == kButton && e.style.button == outlinedButton && !e.primary {
+		e.style.button = ghostButton
+	}
 }

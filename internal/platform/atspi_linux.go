@@ -331,7 +331,9 @@ func (a *atspiBridge) set(title string, bounds image.Rectangle, origin image.Poi
 	}
 	p := &a.pending
 	p.title, p.bounds, p.origin = title, bounds, origin
-	clear(p.nodes)
+	if len(nodes) < len(p.nodes) {
+		clear(p.nodes[len(nodes):])
+	}
 	p.nodes = append(p.nodes[:0], nodes...)
 	a.dirty.Store(true)
 }

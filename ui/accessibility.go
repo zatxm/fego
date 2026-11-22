@@ -25,8 +25,8 @@ func (v *view) updateAccessibility() {
 	if v.access == nil {
 		v.access = make(map[uint64]accessTarget)
 	}
-	clear(v.accessNodes)
-	nodes := v.accessNodes[:0]
+	previous := v.accessNodes
+	nodes := previous[:0]
 	var walk func(*Element, uint64, bool)
 	walk = func(e *Element, parent uint64, disabled bool) {
 		if e.hidden || e.clip.W <= 0 || e.clip.H <= 0 {
@@ -86,8 +86,9 @@ func (v *view) updateAccessibility() {
 		node := fego.AccessNode{ID: e.id, Parent: parent, Role: role, Label: label, Value: value, Bounds: e.clip.pixels(v.scale), Disabled: disabled, Focused: v.focused == e, Checked: e.checked, Min: e.minimum, Max: e.maximum, Number: e.value, Caret: e.cursor, SelectionStart: min(e.cursor, e.anchor), SelectionEnd: max(e.cursor, e.anchor)}
 		if e.kind == kVirtualRow {
 			l := e.parent.virtual
-			_, node.Selected = l.chosen[l.key(e.selected)]
-			node.Focused = node.Focused || v.focused == l.Element && l.lead == e.selected
+			index := int(e.rowIndex)
+			_, node.Selected = l.chosen[l.key(index)]
+			node.Focused = node.Focused || v.focused == l.Element && l.lead == index
 		}
 		nodes = append(nodes, node)
 		v.access[e.id] = accessTarget{element: e, row: -1, disabled: disabled}
@@ -138,13 +139,22 @@ func (v *view) updateAccessibility() {
 		root = v.dialog
 	}
 	walk(root, 0, false)
+	if p := v.popover; p.content != nil {
+		walk(p.content, p.owner.id, false)
+	}
 	if p := v.popup; p != nil {
-		for i := p.first; i < len(p.options) && float32(i-p.first)*34 < p.rect.H-8; i++ {
+		for i := p.first; i < min(p.count(), p.first+p.rows()); i++ {
 			id := p.owner.id + (1 << 31) + uint64(i)
-			r := Rect{p.rect.X, p.rect.Y + 4 + float32(i-p.first)*34, p.rect.W, 34}.intersect(p.rect)
-			nodes = append(nodes, fego.AccessNode{ID: id, Parent: p.owner.id, Role: "button", Label: p.options[i], Bounds: r.pixels(v.scale), Focused: p.selected == i, Selected: p.selected == i})
-			v.access[id] = accessTarget{element: p.owner, row: i, popup: true}
+			item := p.item(i)
+			nodes = append(nodes, fego.AccessNode{ID: id, Parent: p.owner.id, Role: "button", Label: item.Label, Bounds: p.row(i).intersect(p.rect).pixels(v.scale), Disabled: item.Disabled, Focused: p.selected == i, Selected: p.current == i})
+			v.access[id] = accessTarget{element: p.owner, row: i, disabled: item.Disabled, popup: true}
 		}
+	}
+	if action := v.toastButton(); action != nil && v.dialog == nil {
+		walk(action, 0, false)
+	}
+	if len(nodes) < len(previous) {
+		clear(previous[len(nodes):])
 	}
 	host.SetAccessibility(nodes)
 	v.accessNodes = nodes
@@ -156,40 +166,25 @@ func (v *view) accessAction(ev fego.Event) {
 		return
 	}
 	e := target.element
-	for p := e; p != nil; p = p.parent {
-		if p.hidden || p.disabled || p.view != v {
-			return
-		}
-	}
-	if v.dialog != nil {
-		p := e
-		for p.parent != nil {
-			p = p.parent
-		}
-		if p != v.dialog {
-			return
-		}
+	if !v.available(e) {
+		return
 	}
 	if target.popup {
 		p := v.popup
-		if p == nil || p.owner != e || target.row < 0 || target.row >= len(p.options) {
+		if p == nil || p.owner != e || target.row < 0 || target.row >= p.count() {
 			return
 		}
 		switch ev.Action {
 		case "focus":
-			p.selected = target.row
-			p.reveal()
-			v.invalidate(v.root, false)
+			v.highlightPopup(target.row)
 		case "press", "select":
-			v.popup = nil
-			v.invalidate(v.root, false)
-			p.choose(target.row)
+			v.choosePopup(target.row)
 		}
 		return
 	}
 	if e.kind == kVirtualRow && (ev.Action == "press" || ev.Action == "select") {
 		v.focus(e.parent)
-		e.parent.virtual.choose(e.selected, false, false)
+		e.parent.virtual.choose(int(e.rowIndex), false, false)
 		return
 	}
 	switch ev.Action {

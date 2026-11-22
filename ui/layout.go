@@ -53,11 +53,18 @@ func (v *view) measure(e *Element) (w, h float32) {
 		}
 	case kButton:
 		w, h = v.text.Measure(e.text, font, s.bold)
-		w += 32
-		h = max(h+18, 38)
+		if e.pagination == pageNumber {
+			w += 12
+		} else {
+			w += e.style.button.inset() * 2
+			if e.style.icon != noIcon && e.text != "" {
+				w += 20
+			}
+		}
+		h = max(h+12, 36)
 	case kCheck, kRadio:
 		w, h = v.text.Measure(e.text, font, s.bold)
-		w += 30
+		w += 24
 		h = max(28, h)
 	case kSwitch:
 		w, h = v.text.Measure(e.text, font, s.bold)
@@ -65,13 +72,13 @@ func (v *view) measure(e *Element) (w, h float32) {
 		h = max(30, h)
 	case kInput, kEditor:
 		w = 220
-		h = 40
+		h = 36
 		if e.multiline {
 			h = 120
 		}
 	case kSelect:
 		w = 180
-		h = 40
+		h = 36
 	case kSlider:
 		w = 200
 		h = 32
@@ -114,6 +121,11 @@ func (v *view) measure(e *Element) (w, h float32) {
 	return
 }
 
+func (e *Element) innerRect() Rect {
+	r, padding := e.rect, e.style.padding
+	return Rect{r.X + padding[3], r.Y + padding[0], max(0, r.W-padding[1]-padding[3]), max(0, r.H-padding[0]-padding[2])}
+}
+
 func (v *view) layout(e *Element, r, clip Rect) {
 	e.rect = r
 	e.clip = r.intersect(clip)
@@ -122,12 +134,16 @@ func (v *view) layout(e *Element, r, clip Rect) {
 		return
 	}
 	s := &e.style
-	inner := Rect{r.X + s.padding[3], r.Y + s.padding[0], max(0, r.W-s.padding[1]-s.padding[3]), max(0, r.H-s.padding[0]-s.padding[2])}
+	inner := e.innerRect()
 	if e.kind == kVirtualList {
-		e.virtual.layout(v, inner, clip)
+		e.virtual.layout(v, inner, clip, true)
 		return
 	}
 	if e.kind != kBox && e.kind != kVirtualRow {
+		return
+	}
+	if e.pagination == pageBar {
+		v.layoutPagination(e, inner, clip)
 		return
 	}
 	if s.clip {
@@ -316,6 +332,9 @@ func (e *Element) rowCount() int {
 func (e *Element) rowHeight() float32 {
 	if e.kind == kTable {
 		return 42
+	}
+	if e.style.tone == commandSurface || e.style.tone == suggestionSurface {
+		return 32
 	}
 	return 36
 }

@@ -112,7 +112,9 @@ func newChart(bars bool, series []Series) *Chart {
 	c.Element.own().onHover = func(x, y float32) {
 		if i := c.sampleAt(x, y); i != c.hoveredIndex {
 			c.hoveredIndex = i
-			c.Element.touch(false)
+			if c.view != nil {
+				c.view.repaint(c.Element, false)
+			}
 		}
 	}
 	return c.SetSeries(series...)
@@ -133,6 +135,16 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 		var values []float64
 		if i < len(previous) && len(s.Values) >= cap(previous[i].Values)/4 {
 			values = previous[i].Values[:0]
+		} else if i < len(previous) {
+			if i < len(c.traces) && len(s.Values) < cap(c.traces[i])/4 {
+				c.traces[i] = nil
+			}
+			if i < len(c.areaPaths) && len(s.Values) < cap(c.areaPaths[i].commands)/16 {
+				c.areaPaths[i] = Path{}
+			}
+			if i < len(c.barRects) && len(s.Values) < cap(c.barRects[i])/4 {
+				c.barRects[i] = nil
+			}
 		}
 		s.Values = append(values, s.Values...)
 		c.series[i] = s
@@ -146,9 +158,9 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 	}
 	if len(previous) > len(series) {
 		clear(previous[len(series):])
-		if len(series) < len(c.areaPaths) {
-			clear(c.areaPaths[len(series):])
-		}
+		clear(c.traces[min(len(series), len(c.traces)):])
+		clear(c.areaPaths[min(len(series), len(c.areaPaths)):])
+		clear(c.barRects[min(len(series), len(c.barRects)):])
 	}
 	if c.selectedIndex >= c.count {
 		c.selectedIndex = -1
@@ -180,7 +192,7 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 		c.low = max(-math.MaxFloat64, c.low-padding)
 		c.high = min(math.MaxFloat64, c.high+padding)
 	}
-	c.Refresh()
+	c.Element.touch(false)
 	return c
 }
 

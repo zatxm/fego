@@ -47,6 +47,8 @@ const (
 	xMaxClipboard     = 16 << 20
 	xMaxPixels        = 64 << 20
 	xUploadBytes      = (512 << 10) - 64 // Bound staging memory without excessive Xwayland damage requests.
+	xUploadIdleBytes  = 128 << 10
+	xUploadIdleTime   = 250 * time.Millisecond
 )
 
 type xEvent [24]uint64
@@ -288,6 +290,7 @@ type xWindow struct {
 	putArgs                                [10]uintptr
 	imageBytes                             int
 	smallUploads                           int
+	uploadIdleAt                           time.Time
 	surfaceSize, accessOrigin              image.Point
 	exposed                                image.Rectangle
 	shm                                    *xShm
@@ -426,7 +429,7 @@ func (b *xBackend) Run() error {
 			b.event(e)
 		}
 		if !b.quit {
-			if err := b.wait(-1); err != nil {
+			if err := b.wait(b.reclaimUploads(time.Now())); err != nil {
 				return err
 			}
 		}
@@ -458,6 +461,24 @@ func (b *xBackend) openConn() error {
 	}
 	b.conn, b.rawConn = f, rc
 	return nil
+}
+
+// Retained X11 pixels stay on the server when a large client upload buffer
+// is discarded. Only pending large buffers set a deadline for the event loop.
+func (b *xBackend) reclaimUploads(now time.Time) time.Duration {
+	next := time.Duration(-1)
+	for _, w := range b.windows {
+		if w.uploadIdleAt.IsZero() {
+			continue
+		}
+		wait := w.uploadIdleAt.Sub(now)
+		if wait <= 0 {
+			w.releaseUploads()
+		} else if next < 0 || wait < next {
+			next = wait
+		}
+	}
+	return next
 }
 
 func (b *xBackend) pending() bool {
@@ -876,8 +897,24 @@ func (w *xWindow) present(src *image.RGBA, damage []image.Rectangle, origin imag
 	w.putArgs[0] = w.b.display
 	purego.SyscallN(xl.flushImage, w.putArgs[:1]...)
 	runtime.KeepAlive(w)
+	if capacity > xUploadIdleBytes {
+		w.uploadIdleAt = time.Now().Add(xUploadIdleTime)
+	} else {
+		w.uploadIdleAt = time.Time{}
+	}
 	w.presented = true
 	return true
+}
+
+func (w *xWindow) releaseUploads() {
+	if w.img != nil {
+		xl.destroyImage(w.img)
+		w.img = nil
+	}
+	w.releaseShm()
+	w.imageBytes = 0
+	w.smallUploads = 0
+	w.uploadIdleAt = time.Time{}
 }
 
 // socketBuffers keeps a client-side staging image for XPutImage.
@@ -1095,12 +1132,7 @@ func (w *xWindow) dispose(destroy bool) {
 		xl.destroyIC(w.ic)
 		w.ic = 0
 	}
-	if w.img != nil {
-		xl.destroyImage(w.img)
-		w.img = nil
-	}
-	w.releaseShm()
-	w.imageBytes = 0
+	w.releaseUploads()
 	if w.gc != 0 {
 		xl.freeGC(w.b.display, w.gc)
 		w.gc = 0
@@ -1255,8 +1287,8 @@ func (b *xBackend) readClipboardProperty() {
 		return
 	}
 	if kind == b.incr && !t.incremental {
+		// GetProperty already acknowledged INCR; another delete can drop the first chunk.
 		t.incremental = true
-		xl.deleteProperty(b.display, t.window.id, b.clipProperty)
 		return
 	}
 	if format != 8 || (kind != b.utf8 && kind != 31 && kind != b.textAtom) || count > 0 && data == nil {

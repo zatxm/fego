@@ -48,7 +48,7 @@ func (d *Document) Mount(host fego.Host) fego.View {
 	if d.live != nil || d.root.view != nil || d.root.parent != nil {
 		panic("ui: a Document belongs to one window")
 	}
-	v := &view{doc: d, root: d.root, host: host, theme: d.theme, text: fonttext.New(), needsLayout: true, focusVisible: true}
+	v := &view{doc: d, root: d.root, host: host, theme: d.theme, text: fonttext.New(), needsLayout: true, focusVisible: true, hoveredRow: -1}
 	if r, ok := host.(regionHost); ok && r.RetainsPixels() {
 		v.region = r
 	}
@@ -92,22 +92,31 @@ type view struct {
 	dirty                   []image.Rectangle
 	needsLayout             bool
 	hover, pressed, focused *Element
+	hoveredRow              int
 	focusVisible            bool
 	scrollDrag              *Element
 	scrollGrab              float32
 	pointerX, pointerY      float32
 	popup                   *popup
+	popupState              popup
+	popover                 popover
 	dialog                  *Element
 	dialogShade             uint8
 	dialogFade              func()
-	drawer                  bool
+	dialogPlacement         panelPlacement
+	drawerDragging          bool
+	drawerOrigin            float32
 	returnFocus             *Element
-	toast                   string
+	toasts                  [3]notification
+	toastCount              int
+	toastCancel             func()
 	tip                     tooltip
 	frames, paints          uint64
+	accessDirty             bool
 	access                  map[uint64]accessTarget
 	accessNodes             []fego.AccessNode
 	rowLabels               map[[2]uint64]string
+	canvas                  *Painter
 	scrolling               *pixelScroll
 	scrollState             pixelScroll
 	scrollCheck             *Element
@@ -123,6 +132,8 @@ func (v *view) ResetPresenter() {
 }
 
 func (v *view) Close() {
+	v.closePopover()
+	v.clearToasts()
 	v.dismissTip()
 	if v.dialogFade != nil {
 		v.dialogFade()
@@ -144,11 +155,28 @@ func (v *view) Close() {
 	v.text.Close()
 }
 func (v *view) invalidate(e *Element, layout bool) {
+	v.accessDirty = true
+	v.repaint(e, layout)
+}
+
+func (v *view) repaint(e *Element, layout bool) {
 	v.scrolling = nil
 	if layout {
+		if c := v.popover.content; c != nil {
+			for parent := e; parent != nil; parent = parent.parent {
+				if parent == c {
+					v.popover.layout = true
+					v.host.Invalidate()
+					return
+				}
+			}
+		}
 		v.scrollCheck = nil
 		v.needsLayout = true
 	} else if !v.size.Empty() {
+		if e.parent != nil && e.parent.style.tone == groupSurface {
+			e = e.parent
+		}
 		v.damage(e.rect.pixels(v.scale).Inset(-e.paintPadding(v.scale)))
 	}
 	v.host.Invalidate()
@@ -193,6 +221,7 @@ func (v *view) frame(force bool) {
 		v.needsLayout = true
 	}
 	if v.needsLayout {
+		v.accessDirty = true
 		v.scrolling = nil
 		r := Rect{W: float32(w) / scale, H: float32(h) / scale}
 		v.layout(v.root, r, r)
@@ -201,13 +230,25 @@ func (v *view) frame(force bool) {
 			dw = min(dw, max(0, r.W-32))
 			dh = min(dh, max(0, r.H-32))
 			bounds := Rect{(r.W - dw) / 2, (r.H - dh) / 2, dw, dh}
-			if v.drawer {
+			switch v.dialogPlacement {
+			case rightPanel:
+				dw = min(dw, r.W*.75)
 				bounds = Rect{r.W - dw, 0, dw, r.H}
+			case bottomPanel:
+				dh = min(dh, r.H*.8)
+				bounds = Rect{0, r.H - dh, r.W, dh}
 			}
 			v.layout(v.dialog, bounds, r)
 		}
+		v.layoutPopover()
+		v.layoutToastButton()
+		if v.popup != nil {
+			v.placePopup(v.popup)
+		}
 		v.dirty = append(v.dirty[:0], v.size)
 		v.needsLayout = false
+	} else if v.popover.layout {
+		v.layoutPopover()
 	}
 	if force && v.region != nil {
 		// A retained window asks to paint only after it lost pixels.
@@ -221,7 +262,9 @@ func (v *view) frame(force bool) {
 		return
 	}
 	v.frames++
-	v.updateCaret()
+	if v.accessDirty {
+		v.updateCaret()
+	}
 	scroll := v.scrolling
 	v.scrolling = nil
 	if scroll != nil {
@@ -246,6 +289,8 @@ func (v *view) frame(force bool) {
 		}
 		if dst.Empty() {
 			v.dirty = append(v.dirty[:0], full)
+		} else {
+			v.damageCopiedOverlays(scroll, dst)
 		}
 	}
 	if v.region != nil {
@@ -286,8 +331,30 @@ func (v *view) frame(force bool) {
 	}
 	v.paints += uint64(len(v.dirty))
 	v.dirty = v.dirty[:0]
-	v.updateCaret()
-	v.updateAccessibility()
+	if v.accessDirty {
+		v.accessDirty = false
+		v.updateCaret()
+		v.updateAccessibility()
+	}
+}
+
+func (v *view) damageCopiedOverlays(scroll *pixelScroll, dst image.Rectangle) {
+	e := scroll.element
+	if scroll.eraseRow >= 0 {
+		// The old hover highlight moved with the copied pixels.
+		y := e.rect.Y + e.headerHeight() + float32(scroll.eraseRow)*e.rowHeight() - e.scroll
+		row := Rect{e.rect.X, y, e.rect.W, e.rowHeight()}.pixels(v.scale).Intersect(dst)
+		if !row.Empty() {
+			v.dirty = append(v.dirty, row)
+		}
+	}
+	if scroll.copyThumb {
+		old := e.rowScrollThumb(scroll.start).pixels(v.scale).Add(image.Pt(0, scroll.dy))
+		next := e.rowScrollThumb(e.scroll).pixels(v.scale)
+		if area := old.Union(next).Intersect(dst); !area.Empty() {
+			v.dirty = append(v.dirty, area)
+		}
+	}
 }
 
 func (v *view) scrollPixels(scroll *pixelScroll) bool {
@@ -324,7 +391,7 @@ func (v *view) releaseBand() {
 }
 
 func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
-	w, h, scale := v.size.Dx(), v.size.Dy(), v.scale
+	scale := v.scale
 	p := &Painter{dst: dst, clip: d, scale: scale, text: v.text, theme: v.theme}
 	p.fillPixels(d, v.theme.Background)
 	v.paint(p, v.root, false)
@@ -332,15 +399,13 @@ func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
 	if v.dialog != nil {
 		v.paint(p, v.dialog, false)
 	}
+	if v.popover.content != nil {
+		v.paint(p, v.popover.content, false)
+	}
 	if v.popup != nil {
 		v.paintPopup(p)
 	}
-	if v.toast != "" {
-		tw, th := v.text.Measure(v.toast, v.theme.FontSize, true)
-		rr := Rect{(float32(w)/scale - tw - 36) / 2, float32(h)/scale - th - 42, tw + 36, th + 24}
-		p.RoundRect(rr, 10, v.theme.Text)
-		p.Label(v.toast, rr.X+18, rr.Y+12, v.theme.FontSize, v.theme.Surface, true)
-	}
+	v.paintToasts(p)
 	v.paintTip(p)
 }
 
@@ -353,9 +418,18 @@ func (d *Document) Stats() Stats {
 	}
 	return Stats{d.live.frames, d.live.paints}
 }
-func (d *Document) ShowDialog(content *Element) { d.showDialog(content, false) }
 
-func (d *Document) showDialog(content *Element, drawer bool) {
+type panelPlacement uint8
+
+const (
+	centerPanel panelPlacement = iota
+	rightPanel
+	bottomPanel
+)
+
+func (d *Document) ShowDialog(content *Element) { d.showDialog(content, centerPanel) }
+
+func (d *Document) showDialog(content *Element, placement panelPlacement) {
 	v := d.live
 	if v == nil {
 		return
@@ -363,6 +437,8 @@ func (d *Document) showDialog(content *Element, drawer bool) {
 	if content.parent != nil || content.view != nil {
 		panic("ui: dialog must be detached")
 	}
+	v.closePopover()
+	v.closePopup()
 	opening := v.dialog == nil
 	if opening {
 		v.returnFocus = v.focused
@@ -372,7 +448,8 @@ func (d *Document) showDialog(content *Element, drawer bool) {
 		v.dialog.attach(nil)
 	}
 	v.dialog = content
-	v.drawer = drawer
+	v.dialogPlacement = placement
+	v.drawerDragging = false
 	content.attach(v)
 	v.focused = nil
 	if opening {
@@ -388,6 +465,7 @@ func (d *Document) CloseDialog() {
 	v.forget(v.dialog)
 	v.dialog.attach(nil)
 	v.dialog = nil
+	v.drawerDragging = false
 	v.focused = nil
 	if e := v.returnFocus; e != nil && e.view == v {
 		v.focus(e)
@@ -423,12 +501,6 @@ func (v *view) fadeDialogShade(target uint8) {
 			apply(shade)
 		}
 	})
-}
-func (d *Document) ShowToast(message string) {
-	if d.live != nil {
-		d.live.toast = message
-		d.live.invalidate(d.root, false)
-	}
 }
 
 // Queued invalidations may follow an input event that already presented its changes.

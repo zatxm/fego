@@ -145,6 +145,112 @@ func TestScrollingMatchesFullRepaint(t *testing.T) {
 	}
 }
 
+func TestTableScrollLeavesFixedHeaderOutsideDamage(t *testing.T) {
+	data := make([][]string, 100)
+	for i := range data {
+		data[i] = []string{fmt.Sprint(i)}
+	}
+	table := Table([]ColumnDef{{Title: "Row"}}, data).Fill()
+	h := newScrollScreen(View(table), 1, true)
+	defer h.Close()
+	h.Send(fego.Event{Kind: fego.Scroll, X: 40, Y: 80, DY: 8})
+	if h.copies != 1 {
+		t.Fatal("expected retained scroll copy")
+	}
+	oldThumb := table.rowScrollThumb(0).pixels(h.Scale).Add(image.Pt(0, -8))
+	newThumb := table.rowScrollThumb(table.scroll).pixels(h.Scale)
+	if regions := h.Damage(); len(regions) != 2 || !regions[1].In(oldThumb.Union(newThumb)) {
+		t.Fatalf("flat table should upload only the exposed rows and scrollbar: %v", regions)
+	}
+	header := int(table.Bounds().Y + table.headerHeight())
+	for _, region := range h.Damage() {
+		if region.Min.Y < header {
+			t.Fatalf("scroll painted the fixed header: %v", region)
+		}
+	}
+	checkScrollPixels(t, h)
+	for _, offset := range []float32{2100, table.maxScroll()} {
+		h.Document.live.scrollRows(table, offset)
+		h.Step()
+		copies := h.copies
+		h.Send(fego.Event{Kind: fego.Scroll, X: 40, Y: 80, DY: -8})
+		if h.copies != copies+1 {
+			t.Fatal("scrollbar thumb blocked retained copying")
+		}
+		checkScrollPixels(t, h)
+	}
+}
+
+func TestTableScrollClearsCopiedHover(t *testing.T) {
+	for _, theme := range []Theme{Light, Dark} {
+		rows := make([][]string, 100)
+		for i := range rows {
+			rows[i] = []string{fmt.Sprint(i)}
+		}
+		table := Table([]ColumnDef{{Title: "Row"}}, rows).Fill()
+		doc := View(table).Theme(theme)
+		h := newScrollScreen(doc, 1.25, true)
+		h.Send(fego.Event{Kind: fego.PointerMove, X: 110, Y: 245})
+		if doc.live.hoveredRow < 0 {
+			t.Fatal("hover did not activate a table row")
+		}
+		for range 2 {
+			doc.live.Event(fego.Event{Kind: fego.Scroll, X: 110, Y: 245, DY: 8 * h.Scale})
+		}
+		h.Step()
+		if h.copies != 1 || doc.live.hoveredRow != -1 {
+			t.Fatal("clearing hover blocked retained scrolling")
+		}
+		checkScrollPixels(t, h)
+		h.Close()
+	}
+}
+
+func TestTableSortingKeepsEqualRowsStable(t *testing.T) {
+	table := Table([]ColumnDef{{Title: "Label"}}, [][]string{{"c"}, {"a"}, {"a"}, {}})
+	h := NewTester(table, 300, 240)
+	defer h.Close()
+	h.Click(80, 20)
+	if !slices.Equal(table.order, []int{3, 1, 2, 0}) {
+		t.Fatalf("ascending order: %v", table.order)
+	}
+	h.Click(80, 20)
+	if !slices.Equal(table.order, []int{0, 1, 2, 3}) {
+		t.Fatalf("descending order: %v", table.order)
+	}
+}
+
+func TestRangeSliderPartialRepaintMatchesFullPaint(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 2} {
+		slider := RangeSlider(25, 70, 0, 100)
+		h := newScrollScreen(View(Column(slider.Element).Padding(14)), scale, true)
+		for _, interval := range [][2]float64{{26, 72}, {40, 41}, {42, 42}, {90, 100}, {0, 20}} {
+			slider.SetRange(interval[0], interval[1])
+			h.Step()
+			checkScrollPixels(t, h)
+		}
+		h.Close()
+	}
+}
+
+func TestSingleLineInputEditsOnlyRepaintTextArea(t *testing.T) {
+	input := TextInput("An initial value")
+	h := newScrollScreen(View(Column(input).Padding(14)), 1.25, true)
+	defer h.Close()
+	clickElement(h.Tester, input)
+	input.SetText("New")
+	h.Step()
+	inner := h.Document.live.inputInner(input).pixels(h.Scale)
+	for _, damage := range h.Damage() {
+		if !damage.In(inner) {
+			t.Fatalf("text edit repainted outside the input contents: %v", damage)
+		}
+	}
+	checkScrollPixels(t, h)
+	h.Type(" text")
+	checkScrollPixels(t, h)
+}
+
 func TestScrollInvalidationAndOverlayFallBack(t *testing.T) {
 	rows := List(1000, func(i int) string { return fmt.Sprint(i) }).Fill()
 	root := Column(rows)
@@ -166,7 +272,7 @@ func TestScrollInvalidationAndOverlayFallBack(t *testing.T) {
 		}
 		checkScrollPixels(t, h)
 		h.Document.CloseDialog()
-		v.toast = ""
+		v.clearToasts()
 		root.Padding(0)
 		h.Step()
 	}
@@ -259,6 +365,30 @@ func TestListLabelCacheBounded(t *testing.T) {
 			}
 		}
 		checkScrollPixels(t, h)
+	}
+}
+
+func TestListAndTableUpdatesKeepOtherRowLabels(t *testing.T) {
+	label := "Initial list item"
+	calls := 0
+	list := List(1, func(i int) string { calls++; return label }).Height(80)
+	table := Table([]ColumnDef{{Title: "Name"}, {Title: "Status"}}, [][]string{{"Old", "Ready"}}).Height(100)
+	h := newScrollScreen(View(Column(list, table).Fill()), 1, true)
+	defer h.Close()
+	calls = 0
+	table.SetRows([][]string{{"New", "Ready"}})
+	h.Step()
+	if calls != 0 || h.Document.live.rowLabels[[2]uint64{table.id, 0}] != "New, Ready" {
+		t.Fatal("updating the table discarded the list text or kept stale table text")
+	}
+	label = "Updated list item"
+	list.SetCount(1)
+	if h.Document.live.rowLabels[[2]uint64{table.id, 0}] != "New, Ready" {
+		t.Fatal("updating the list discarded the table text")
+	}
+	h.Step()
+	if h.Document.live.rowLabels[[2]uint64{list.id, 0}] != label {
+		t.Fatal("updating the list retained stale list text")
 	}
 }
 

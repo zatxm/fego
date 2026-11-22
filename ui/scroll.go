@@ -9,13 +9,16 @@ type pixelScroll struct {
 	element    *Element
 	rect, full image.Rectangle
 	dy         int
+	eraseRow   int
+	start      float32
+	copyThumb  bool
 }
 
 func (v *view) scrollRows(e *Element, next float32) {
 	if e.kind == kVirtualList {
 		if e.scroll != next {
 			e.scroll = next
-			v.layout(e, e.rect, e.clip)
+			e.virtual.layout(v, e.innerRect(), e.clip, v.needsLayout)
 			v.invalidate(e, false)
 		}
 		return
@@ -27,6 +30,18 @@ func (v *view) scrollRows(e *Element, next float32) {
 	previous := v.scrolling
 	coalescing := previous != nil && previous.element == e
 	clean := !v.needsLayout && (len(v.dirty) == 0 || coalescing) && !v.size.Empty()
+	eraseRow := -1
+	start := old
+	if coalescing {
+		eraseRow = previous.eraseRow
+		start = previous.start
+	}
+	if e == v.hover && v.hoveredRow >= 0 {
+		if v.hoveredRow != e.selected {
+			eraseRow = v.hoveredRow
+		}
+		v.hoveredRow = -1
+	}
 	e.scroll = next
 	localLayout := clean && e.scrollable && len(e.children) == 1 && !e.children[0].hidden
 	exactShift := true
@@ -47,7 +62,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 		}
 		opaque = exactShift && (e.style.bgSet && e.style.bg.A == 255 || e == v.root && v.theme.Background.A == 255) && v.scrollCopyOK
 	}
-	if !clean || !opaque || v.dialog != nil || v.popup != nil || v.toast != "" || v.tip.shown {
+	if !clean || !opaque || v.dialog != nil || v.popup != nil || v.popover.content != nil || v.toastCount != 0 || v.tip.shown {
 		return
 	}
 	delta := (old - next) * v.scale
@@ -58,10 +73,28 @@ func (v *view) scrollRows(e *Element, next float32) {
 	margin := int(math.Ceil(float64(max(0, e.style.radius)*v.scale))) + 2
 	r := e.rect.pixels(v.scale)
 	r.Min.X = int(math.Ceil(float64(e.rect.X * v.scale)))
-	r.Min.Y += margin
-	r.Max.Y -= margin
-	r.Min.Y = max(r.Min.Y, int(math.Ceil(float64((e.rect.Y+e.headerHeight())*v.scale)))+margin)
 	r.Max.X = min(r.Max.X, int(math.Floor(float64((e.rect.X+e.rect.W-9)*v.scale))))
+	copyThumb := false
+	if e.rowCount() > 0 {
+		// Keep rounded corners in narrow side bands instead of repainting
+		// full-width margins above and below the copied rows.
+		flat := e.kind == kTable && e == v.root && v.theme.Background == v.theme.Surface &&
+			!e.style.bgSet && !e.style.borderSet && !(v.focusVisible && v.focused == e)
+		if !flat {
+			r.Min.X += margin
+			r.Max.X = min(r.Max.X, int(math.Floor(float64((e.rect.X+e.rect.W)*v.scale)))-margin)
+		} else if e.rect.H-e.headerHeight() >= 24 {
+			// The thumb is the only moving overlay. Repaint just its old and
+			// new positions after copying the otherwise opaque row surface.
+			r.Max.X = int(math.Floor(float64((e.rect.X + e.rect.W) * v.scale)))
+			copyThumb = true
+		}
+		r.Min.Y = int(math.Ceil(float64((e.rect.Y + e.headerHeight()) * v.scale)))
+		r.Max.Y = int(math.Floor(float64((e.rect.Y + e.rect.H) * v.scale)))
+	} else {
+		r.Min.Y += margin
+		r.Max.Y -= margin
+	}
 	if editor {
 		inner := v.inputInner(e)
 		scrolling := Rect{e.rect.X + 4, inner.Y, inner.W + 48, inner.H}
@@ -84,7 +117,13 @@ func (v *view) scrollRows(e *Element, next float32) {
 			}
 		}
 	}
-	v.scrollState = pixelScroll{element: e, rect: r, full: v.dirty[0], dy: int(delta)}
+	full := v.dirty[0]
+	if header := e.headerHeight(); header > 0 {
+		// The fixed header did not scroll. Excluding it keeps paint/upload bands
+		// sized for the exposed body strips instead of the entire header.
+		full.Min.Y = max(full.Min.Y, int(math.Floor(float64((e.rect.Y+header)*v.scale))))
+	}
+	v.scrollState = pixelScroll{element: e, rect: r, full: full, dy: int(delta), eraseRow: eraseRow, start: start, copyThumb: copyThumb}
 	v.scrolling = &v.scrollState
 }
 
