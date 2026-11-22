@@ -21,11 +21,14 @@ func TestNativeTextLimitsBeforeConversion(t *testing.T) {
 	tooManyUTF16Runes := make([]uint16, nativeTextMaxRunes+1)
 	tooManyUTF8Bytes := make([]byte, nativeTextMaxBytes+1)
 	tooManyUTF16Bytes := make([]uint16, nativeTextMaxBytes/2+1)
+	// AllocsPerRun includes background allocations; one sample can fail
+	// even when the rejection path itself does not allocate.
+	const allocationSamples = 16
 	for _, data := range [][]byte{tooManyUTF8Runes, tooManyUTF8Bytes} {
 		if _, ok := nativeUTF8Text(data); ok {
 			t.Fatal("oversized UTF8 accepted")
 		}
-		if allocations := testing.AllocsPerRun(1, func() { nativeUTF8Text(data) }); allocations != 0 {
+		if allocations := testing.AllocsPerRun(allocationSamples, func() { nativeUTF8Text(data) }); allocations != 0 {
 			t.Fatalf("rejected UTF8 allocated %v objects", allocations)
 		}
 	}
@@ -33,7 +36,7 @@ func TestNativeTextLimitsBeforeConversion(t *testing.T) {
 		if _, ok := nativeUTF16Text(data); ok {
 			t.Fatal("oversized UTF16 accepted")
 		}
-		if allocations := testing.AllocsPerRun(1, func() { nativeUTF16Text(data) }); allocations != 0 {
+		if allocations := testing.AllocsPerRun(allocationSamples, func() { nativeUTF16Text(data) }); allocations != 0 {
 			t.Fatalf("rejected UTF16 allocated %v objects", allocations)
 		}
 	}
