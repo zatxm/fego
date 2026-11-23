@@ -62,6 +62,17 @@ func nativeSmoke() error {
 		frame := image.NewRGBA(image.Rect(0, 0, 320, 200))
 		draw.Draw(frame, frame.Bounds(), image.NewUniform(color.RGBA{R: 37, G: 99, B: 235, A: 255}), image.Point{}, draw.Src)
 		window.Present(frame, []image.Rectangle{frame.Bounds()})
+		gpu := window.(GPURegionPresenter)
+		if gpu.SetGPUEnabled(true) && gpu.GPUActive() {
+			if !gpu.PresentGPURegions(frame.Rect.Size(), func(upload func(*image.RGBA)) {
+				upload(frame.SubImage(image.Rect(0, 0, 320, 80)).(*image.RGBA))
+				upload(frame.SubImage(image.Rect(0, 80, 320, 200)).(*image.RGBA))
+			}) {
+				checkErr = fmt.Errorf("native GPU region presentation failed")
+			}
+			gpu.SetGPUEnabled(false)
+			window.Present(frame, []image.Rectangle{frame.Bounds()})
+		}
 		window.SetTitle("fego native smoke ✓")
 		window.TextInput(true, image.Rect(10, 10, 12, 30))
 		window.TextInput(false, image.Rectangle{})
@@ -90,5 +101,5 @@ func nativeSmoke() error {
 	if phase != 2 || !resized {
 		return fmt.Errorf("missing paint or resize: phase=%d resize=%v", phase, resized)
 	}
-	return nil
+	return checkErr
 }

@@ -41,6 +41,7 @@ type Event struct {
 }
 
 type Options struct {
+	X11Render          bool
 	Title, AppID       string
 	Width, Height      int
 	Icon, TitleBarIcon *image.NRGBA
@@ -97,6 +98,13 @@ type PixelScroller interface {
 // img is borrowed for the call and must not be retained.
 type RegionPresenter interface {
 	PresentRegion(*image.RGBA)
+}
+
+// GPURegionPresenter stores the persistent pixels in a texture. Each borrowed
+// region is uploaded synchronously, then the complete frame is swapped once.
+type GPURegionPresenter interface {
+	Graphics
+	PresentGPURegions(image.Point, func(func(*image.RGBA))) bool
 }
 
 // Graphics is implemented by backends with optional hardware presentation.

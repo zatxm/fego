@@ -181,3 +181,41 @@ func (p *glPresenter) present(img *image.RGBA, damage []image.Rectangle) bool {
 	g.drawArrays(4, 0, 3)
 	return g.getError() == 0 && p.ctx.Swap()
 }
+
+func (s *gpuState) presentRegions(size image.Point, paint func(func(*image.RGBA))) bool {
+	p := s.renderer
+	if p == nil {
+		return false
+	}
+	if size.X < 1 || size.Y < 1 || max(size.X, size.Y) > int(p.maxTexture) || !p.ctx.MakeCurrent() {
+		s.close()
+		return false
+	}
+	g := &p.gl
+	if size != p.size {
+		g.viewport(0, 0, int32(size.X), int32(size.Y))
+		g.textureImage(0x0de1, 0, 0x8058, int32(size.X), int32(size.Y), 0, 0x1908, 0x1401, nil)
+		p.size = size
+	}
+	paint(p.uploadRegion)
+	g.drawArrays(4, 0, 3)
+	if g.getError() != 0 || !p.ctx.Swap() {
+		s.close()
+		return false
+	}
+	return true
+}
+
+func (p *glPresenter) uploadRegion(img *image.RGBA) {
+	if img == nil {
+		return
+	}
+	r := img.Rect.Intersect(image.Rectangle{Max: p.size})
+	if r.Empty() {
+		return
+	}
+	g := &p.gl
+	g.pixelStore(0x0cf2, int32(img.Stride/4))
+	g.textureSubImage(0x0de1, 0, int32(r.Min.X), int32(r.Min.Y), int32(r.Dx()), int32(r.Dy()), 0x1908, 0x1401, unsafe.Pointer(&img.Pix[img.PixOffset(r.Min.X, r.Min.Y)]))
+	runtime.KeepAlive(img)
+}

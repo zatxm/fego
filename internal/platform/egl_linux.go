@@ -75,7 +75,24 @@ type eglContext struct {
 }
 
 func (w *xWindow) SetGPUEnabled(enabled bool) bool {
+	if w.preferXRender {
+		if enabled == (w.render.dst != 0) {
+			return false
+		}
+		if enabled && !w.render.open(w) {
+			return false
+		}
+		if !enabled {
+			w.render.close(w.b.display)
+		}
+		w.releaseUploads()
+		w.surfaceSize = image.Point{}
+		return true
+	}
 	changed := w.graphics.set(enabled, w.newGPUContext)
+	if changed && w.graphics.renderer != nil {
+		w.releaseUploads()
+	}
 	if w.b.eglContexts == 0 && w.b.eglDisplay != 0 {
 		egl.terminate(w.b.eglDisplay)
 		w.b.eglDisplay = 0
@@ -83,9 +100,23 @@ func (w *xWindow) SetGPUEnabled(enabled bool) bool {
 	w.surfaceSize = image.Point{}
 	return changed
 }
-func (w *xWindow) UsesFullSurface() bool                 { return w.GPUActive() }
-func (w *xWindow) GPUActive() bool                       { return w.graphics.renderer != nil }
-func (w *xWindow) SetFragmentShader(source string) error { return w.graphics.shader(source) }
+func (w *xWindow) PresentGPURegions(size image.Point, paint func(func(*image.RGBA))) bool {
+	if w.render.dst != 0 {
+		paint(w.PresentRegion)
+		return true
+	}
+	return w.graphics.presentRegions(size, paint)
+}
+func (w *xWindow) GPUActive() bool { return w.render.dst != 0 || w.graphics.renderer != nil }
+func (w *xWindow) SetFragmentShader(source string) error {
+	if w.render.dst != 0 {
+		if source == "" {
+			return nil
+		}
+		return errors.New("fego: custom fragment shaders require OpenGL; disable X11Render for this window")
+	}
+	return w.graphics.shader(source)
+}
 
 func (w *xWindow) newGPUContext() (glContext, error) {
 	b := w.b

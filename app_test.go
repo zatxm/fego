@@ -298,3 +298,43 @@ func TestTrayMenusIgnoreStaleAndDisabledClicks(t *testing.T) {
 		t.Fatal("quit leaked a tray")
 	}
 }
+
+type failingRegionWindow struct {
+	testWindow
+	active bool
+}
+
+func (w *failingRegionWindow) GPUActive() bool            { return w.active }
+func (w *failingRegionWindow) SetGPUEnabled(on bool) bool { w.active = on; return true }
+func (w *failingRegionWindow) PresentGPURegions(_ image.Point, paint func(func(*image.RGBA))) bool {
+	paint(func(*image.RGBA) {})
+	w.active = false
+	return false
+}
+
+type resetView struct{ resets, paints int }
+
+func (v *resetView) ResetPresenter() { v.resets++ }
+func (v *resetView) Event(e Event) {
+	if e.Kind == Paint {
+		v.paints++
+	}
+}
+func (v *resetView) Close() {}
+
+func TestGPURegionLossQueuesFullPaint(t *testing.T) {
+	native := &failingRegionWindow{active: true}
+	view := &resetView{}
+	w := &Window{app: NewApp(), native: native, view: view, width: 160, height: 100}
+	if !w.RetainsPixels() {
+		t.Fatal("texture did not advertise region support")
+	}
+	w.PresentRegion(image.NewRGBA(image.Rect(12, 15, 18, 20)))
+	if view.resets != 0 || view.paints != 0 || w.RetainsPixels() {
+		t.Fatal("fallback re-entered the current frame or retained the lost texture")
+	}
+	w.app.dispatch()
+	if view.resets != 1 || view.paints != 1 {
+		t.Fatal("incomplete fallback repaint", view)
+	}
+}

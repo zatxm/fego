@@ -146,9 +146,10 @@ func (w *webWindow) resize() {
 		return
 	}
 	w.width, w.height, w.scale = width, height, dpr
-	w.canvas.Set("width", width)
-	w.canvas.Set("height", height)
-	if w.gpu != nil {
+	if w.gpu == nil {
+		w.canvas.Set("width", width)
+		w.canvas.Set("height", height)
+	} else {
 		if !w.gpu.resize(width, height) {
 			w.closeGPU()
 		}

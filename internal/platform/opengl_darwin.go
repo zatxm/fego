@@ -4,6 +4,7 @@ package platform
 
 import (
 	"errors"
+	"image"
 	"runtime"
 	"sync"
 	"unsafe"
@@ -25,7 +26,16 @@ type cglContext struct {
 
 func (w *cocoaWindow) SetGPUEnabled(enabled bool) bool {
 	changed := w.graphics.set(enabled, w.newGPUContext)
+	if changed && w.GPUActive() {
+		if w.image != 0 {
+			mac.imageRelease(w.image)
+			w.image = 0
+		}
+	}
 	return changed
+}
+func (w *cocoaWindow) PresentGPURegions(size image.Point, paint func(func(*image.RGBA))) bool {
+	return w.graphics.presentRegions(size, paint)
 }
 func (w *cocoaWindow) GPUActive() bool                       { return w.graphics.renderer != nil }
 func (w *cocoaWindow) SetFragmentShader(source string) error { return w.graphics.shader(source) }

@@ -58,6 +58,7 @@ type WindowOptions struct {
 	Width, Height int // initial logical pixels
 	Content       Content
 	GPU           bool        // opt in to hardware presentation when available
+	X11Render     bool        // use the X server for GPU presentation on Linux; custom GLSL requires OpenGL
 	Icon          image.Image // overrides the application icon
 	TitleBarIcon  image.Image // optional title-bar accessory on macOS
 }
@@ -238,7 +239,7 @@ func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
 	w := &Window{app: a, width: o.Width, height: o.Height, scale: 1}
 	n, err := a.backend.Open(platform.Options{
 		Title: o.Title, Width: o.Width, Height: o.Height, AppID: a.options.ID,
-		Icon: icon, TitleBarIcon: titleBarIcon,
+		Icon: icon, TitleBarIcon: titleBarIcon, X11Render: o.X11Render,
 	}, w.event)
 	if err != nil {
 		return nil, err
@@ -341,8 +342,8 @@ func (w *Window) Present(img *image.RGBA, damage []image.Rectangle) {
 // presented pixels and send a Paint event after losing them, so content may
 // present only damaged regions instead of retaining a full-window image.
 func (w *Window) RetainsPixels() bool {
-	if native, ok := w.native.(interface{ UsesFullSurface() bool }); ok && native.UsesFullSurface() {
-		return false
+	if native, ok := w.native.(platform.GPURegionPresenter); ok && native.GPUActive() {
+		return true
 	}
 	_, ok := w.native.(platform.RegionPresenter)
 	return ok
@@ -355,8 +356,39 @@ func (w *Window) PresentRegion(img *image.RGBA) {
 	if w.closed {
 		return
 	}
+	if native, ok := w.native.(platform.GPURegionPresenter); ok && native.GPUActive() {
+		w.PresentRegions(func(upload func(*image.RGBA)) { upload(img) })
+		return
+	}
 	if native, ok := w.native.(platform.RegionPresenter); ok {
 		native.PresentRegion(img)
+		w.presented()
+	}
+}
+
+// PresentRegions groups borrowed device-pixel regions into one displayed frame.
+func (w *Window) PresentRegions(paint func(func(*image.RGBA))) {
+	if w.closed {
+		return
+	}
+	if native, ok := w.native.(platform.GPURegionPresenter); ok && native.GPUActive() {
+		if native.PresentGPURegions(image.Pt(w.width, w.height), paint) {
+			w.presented()
+		} else {
+			// A lost texture needs a full CPU repaint after the current frame unwinds.
+			w.app.Post(func() {
+				if !w.closed {
+					if v, ok := w.view.(interface{ ResetPresenter() }); ok {
+						v.ResetPresenter()
+					}
+					w.event(Event{Kind: Paint})
+				}
+			})
+		}
+		return
+	}
+	if native, ok := w.native.(platform.RegionPresenter); ok {
+		paint(native.PresentRegion)
 		w.presented()
 	}
 }

@@ -166,7 +166,9 @@ Use `ui.Editor` for find and replace, fold ranges, and multiple carets. Alt-clic
 
 Use `ui.Path` with `FillPath` or `StrokePath` in a canvas. Charts use the shadcn Neutral palette and show values on hover or with keyboard selection. `ui.Animate` and `ui.Timeline` run on the UI thread and schedule frames while tracks are active.
 
-GPU presentation defaults to off. Set `WindowOptions.GPU` at creation or call `window.SetGPUEnabled(true)` on the UI thread to enable it. Linux, Windows, and macOS use OpenGL, and the browser uses WebGL 2. `window.GPUActive()` reports whether initialization succeeded. CPU presentation resumes when the hardware path is unavailable. Controls and paths are rasterized in Go. Applications can apply a full-frame GLSL effect with `window.SetFragmentShader` using `frameTexture` and `frameUV`. The mobile platforms use the system compositor.
+GPU presentation defaults to off. Set `WindowOptions.GPU` at creation or call `window.SetGPUEnabled(true)` on the UI thread to enable it. Linux, Windows, and macOS use OpenGL, and the browser uses WebGL 2. `window.GPUActive()` reports whether initialization succeeded. CPU presentation resumes when the hardware path is unavailable. Controls and paths are rasterized in Go. Applications can apply a full-frame GLSL effect with `window.SetFragmentShader` using `frameTexture` and `frameUV`. The desktop OpenGL presenter uploads damaged bands into a retained texture and swaps once per frame. Android uses mutable bitmap tiles and iOS uses Core Animation layers. Both request a frame when content changes.
+
+On Linux, apps that only present pixels can also set `WindowOptions.X11Render` to use the X server for compositing on DRI3 displays. This path retains damage regions without loading an OpenGL driver into the application. Custom fragment shaders require the OpenGL path.
 
 ## Text and accessibility
 

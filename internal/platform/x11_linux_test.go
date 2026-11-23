@@ -305,6 +305,54 @@ func testX11Native(t *testing.T, shm bool) {
 				}
 				xl.destroyImage(actual)
 			}
+			if !shm {
+				w.preferXRender = true
+				if w.SetGPUEnabled(true) {
+					if !w.GPUActive() || w.graphics.renderer != nil {
+						t.Error("XRender should retain regions")
+					}
+					w.Present(img, []image.Rectangle{img.Rect})
+					w.PresentRegion(region)
+					actual = getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+					if actual == nil {
+						t.Error("XRender readback failed")
+					} else {
+						if getPixel(actual, 51, 61)&0xffffff != 0x624c36 || getPixel(actual, 54, 61)&0xffffff != 0xc81e28 {
+							t.Error("XRender lost a partial update or surrounding pixels")
+						}
+						xl.destroyImage(actual)
+					}
+					if !w.SetGPUEnabled(false) || w.GPUActive() || w.render.pix != 0 {
+						t.Error("XRender resources retained after switching to CPU")
+					}
+					t.Log("XRender damage readback and live renderer switch verified")
+				} else if w.GPUActive() || w.graphics.renderer != nil {
+					t.Error("XRender fallback did not retain the CPU presenter")
+				}
+				w.preferXRender = false
+				if os.Getenv("FEGO_GL_TEST") == "1" {
+					if !w.SetGPUEnabled(true) {
+						t.Error("hardware OpenGL did not initialize")
+					} else {
+						if !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) {
+							upload(img.SubImage(image.Rect(0, 0, 160, 53)).(*image.RGBA))
+							upload(img.SubImage(image.Rect(0, 53, 160, 100)).(*image.RGBA))
+						}) || !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) { upload(region) }) {
+							t.Error("OpenGL region upload or swap failed")
+						}
+						actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+						if actual == nil {
+							t.Error("OpenGL readback failed")
+						} else {
+							if getPixel(actual, 51, 61)&0xffffff != 0x624c36 || getPixel(actual, 54, 61)&0xffffff != 0xc81e28 {
+								t.Errorf("OpenGL region or retained background mismatch: %#x, %#x", getPixel(actual, 51, 61), getPixel(actual, 54, 61))
+							}
+							xl.destroyImage(actual)
+						}
+						w.SetGPUEnabled(false)
+					}
+				}
+			}
 			if w.surfaceSize != (image.Point{}) {
 				t.Error("region upload left a full-surface size for partial presents")
 			}

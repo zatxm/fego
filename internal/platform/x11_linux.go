@@ -283,6 +283,8 @@ type xBackend struct {
 
 type xWindow struct {
 	graphics                               gpuState
+	preferXRender                          bool
+	render                                 xRenderPresenter
 	b                                      *xBackend
 	id, gc, ic                             uintptr
 	emit                                   func(Event)
@@ -394,7 +396,7 @@ func (b *xBackend) Open(o Options, emit func(Event)) (Window, error) {
 	if id == 0 {
 		return nil, errors.New("XCreateSimpleWindow failed")
 	}
-	x := &xWindow{b: b, id: id, width: w, height: h, emit: emit}
+	x := &xWindow{preferXRender: o.X11Render, b: b, id: id, width: w, height: h, emit: emit}
 	x.gc = xl.createGC(b.display, id, 0, 0)
 	if x.gc == 0 {
 		xl.destroyWindow(b.display, id)
@@ -851,7 +853,12 @@ func (w *xWindow) present(src *image.RGBA, damage []image.Rectangle, origin imag
 		return false
 	}
 	capacity := w.uploadCapacity(needed)
-	shm := w.shmBuffers(capacity)
+	var shm *xShm
+	if w.render.dst != 0 {
+		w.render.resize(w, max(w.width, bounds.Dx()))
+	} else {
+		shm = w.shmBuffers(capacity)
+	}
 	if shm != nil {
 		if w.img != nil {
 			xl.destroyImage(w.img)
@@ -871,6 +878,9 @@ func (w *xWindow) present(src *image.RGBA, damage []image.Rectangle, origin imag
 			continue
 		}
 		rows := max(1, w.imageBytes/(r.Dx()*4))
+		if w.render.dst != 0 {
+			rows = min(rows, w.render.rows)
+		}
 		for y := r.Min.Y; y < r.Max.Y; y += rows {
 			tile := image.Rect(r.Min.X, y, r.Max.X, min(y+rows, r.Max.Y))
 			im.Width, im.Height, im.BytesPerLine = int32(tile.Dx()), int32(tile.Dy()), int32(tile.Dx()*4)
@@ -952,8 +962,15 @@ func (w *xWindow) socketBuffers(capacity int) bool {
 
 func (w *xWindow) putImage(x, y int32, width, height uint32) {
 	// Reuse the ABI argument storage instead of allocating reflection/variadic arrays.
-	w.putArgs = [10]uintptr{w.b.display, w.id, w.gc, uintptr(unsafe.Pointer(w.img)), 0, 0, uintptr(x), uintptr(y), uintptr(width), uintptr(height)}
+	dst, dx, dy := w.id, x, y
+	if w.render.dst != 0 {
+		dst, dx, dy = w.render.pix, 0, 0
+	}
+	w.putArgs = [10]uintptr{w.b.display, dst, w.gc, uintptr(unsafe.Pointer(w.img)), 0, 0, uintptr(dx), uintptr(dy), uintptr(width), uintptr(height)}
 	purego.SyscallN(xl.putImage, w.putArgs[:]...)
+	if w.render.dst != 0 {
+		xr.composite(w.b.display, 1, w.render.src, 0, w.render.dst, 0, 0, 0, 0, x, y, width, height)
+	}
 	runtime.KeepAlive(w)
 }
 
@@ -985,7 +1002,7 @@ func xValidRGBA(src *image.RGBA) bool {
 }
 
 func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
-	if w.GPUActive() {
+	if w.graphics.renderer != nil {
 		return false
 	}
 	if w.closed || !w.presented || delta.X != 0 || delta.Y == 0 || !r.In(image.Rect(0, 0, w.width, w.height)) {
@@ -1115,6 +1132,7 @@ func (w *xWindow) dispose(destroy bool) {
 		return
 	}
 	w.graphics.close()
+	w.render.close(w.b.display)
 	w.closed = true
 	if w.access != nil {
 		w.access.close()

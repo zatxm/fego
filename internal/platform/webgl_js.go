@@ -130,6 +130,10 @@ func (w *webWindow) SetGPUEnabled(enabled bool) bool {
 				return false
 			}
 			w.gpu = g
+			// The underlying canvas still receives input at its CSS size.
+			w.canvas.Set("width", 1)
+			w.canvas.Set("height", 1)
+			w.data = js.Undefined()
 			g.onLoss = js.FuncOf(func(js.Value, []js.Value) any {
 				if w.gpu == g && !w.closed {
 					w.closeGPU()
@@ -159,6 +163,10 @@ func (w *webWindow) closeGPU() {
 	if w.gpu != nil {
 		w.gpu.close()
 		w.gpu = nil
+		if !w.closed {
+			w.canvas.Set("width", w.width)
+			w.canvas.Set("height", w.height)
+		}
 	}
 }
 func (w *webWindow) flushGPU() {

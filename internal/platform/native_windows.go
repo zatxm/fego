@@ -250,13 +250,13 @@ func (w *windowsWindow) Present(img *image.RGBA, damage []image.Rectangle) {
 	if w.closed {
 		return
 	}
-	w.frame = img
 	if w.GPUActive() {
 		if w.graphics.present(img, damage) {
 			return
 		}
 		damage = nil
 	}
+	w.frame = img
 	dc := w.paintDC
 	if dc == 0 {
 		dc, _, _ = winGetDC.Call(w.hwnd)

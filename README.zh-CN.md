@@ -166,7 +166,9 @@ list.Fill()
 
 在画布中使用 `ui.Path`，用 `FillPath` 填充或用 `StrokePath` 描边。图表使用 shadcn Neutral 配色，鼠标悬停或用方向键选中时会显示数值。`ui.Animate` 和 `ui.Timeline` 在 UI 线程更新，只在动画运行期间调度帧。
 
-GPU 呈现默认关闭。创建窗口时可设置 `WindowOptions.GPU`，也可以在 UI 线程调用 `window.SetGPUEnabled(true)`。Linux、Windows 和 macOS 使用 OpenGL，浏览器使用 WebGL 2。用 `window.GPUActive()` 检查是否成功启用。硬件路径不可用时回退至 CPU 呈现。控件和路径由 Go 栅格化，可用 `window.SetFragmentShader` 通过 `frameTexture` 和 `frameUV` 应用整窗 GLSL 效果。移动端继续使用系统合成器。
+GPU 呈现默认关闭。创建窗口时可设置 `WindowOptions.GPU`，也可以在 UI 线程调用 `window.SetGPUEnabled(true)`。Linux、Windows 和 macOS 使用 OpenGL，浏览器使用 WebGL 2。用 `window.GPUActive()` 检查是否成功启用。硬件路径不可用时回退至 CPU 呈现。控件和路径由 Go 栅格化，可用 `window.SetFragmentShader` 通过 `frameTexture` 和 `frameUV` 应用整窗 GLSL 效果。桌面 OpenGL 呈现器将变化区域分块写入纹理，每帧交换一次缓冲。Android 使用分块位图，iOS 使用 Core Animation 图层，两端均按需更新。
+
+在 Linux 上，仅需呈现像素的应用还可设置 `WindowOptions.X11Render`，让支持 DRI3 的 X 服务处理合成。这条路径按变化区域更新，省去应用进程内的 OpenGL 驱动。自定义片段着色器需要使用 OpenGL 路径。
 
 ## 文本与无障碍
 

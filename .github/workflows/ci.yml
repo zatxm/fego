@@ -65,14 +65,15 @@ jobs:
       - name: Build the Android example (arm64 and amd64)
         if: runner.os == 'Linux'
         run: >-
-          go run gioui.org/cmd/gogio@v0.10.3 -target android -arch arm64,amd64
-          -minsdk 23 -targetsdk 36 -appid com.zatxm.fego.demo
-          -o "$RUNNER_TEMP/Fego.apk" ./examples/mobile
-      - name: Compile the unsigned iOS arm64 example
+          scripts/build-mobile.sh android ./examples/mobile "$RUNNER_TEMP/Fego.apk"
+        env:
+          FEGO_APP_ID: com.zatxm.fego.demo
+      - name: Build iOS arm64 example and link simulator app
         if: runner.os == 'macOS'
-        run: >-
-          go run gioui.org/cmd/gogio@v0.10.3 -target ios -arch arm64 -minsdk 15
-          -buildmode archive -o "$RUNNER_TEMP/FegoMobile.framework" ./examples/mobile
+        shell: bash
+        run: |
+          scripts/build-mobile.sh ios-framework ./examples/mobile "$RUNNER_TEMP/FegoMobile.framework"
+          APPLE_SDK=iphonesimulator scripts/build-mobile.sh ios ./examples/mobile "$RUNNER_TEMP/Fego.ipa"
 
   linux-native:
     timeout-minutes: 15

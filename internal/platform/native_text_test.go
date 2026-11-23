@@ -49,3 +49,22 @@ func TestNativeTextLimitsBeforeConversion(t *testing.T) {
 		t.Fatal("valid surrogate-pair boundary rejected", len(got), ok)
 	}
 }
+
+func TestNativeTextChange(t *testing.T) {
+	for _, tc := range []struct {
+		old, value string
+		start, end int
+		inserted   string
+	}{
+		{"a海🛶z", "a海🌊z", 2, 3, "🌊"},
+		{"海🛶", "🛶", 0, 1, ""},
+		{"🛶", "海🛶", 0, 0, "海"},
+		{"a", "abc", 1, 1, "bc"},
+		{"abcc", "abc", 3, 4, ""},
+	} {
+		start, end, inserted := nativeTextChange(tc.old, tc.value)
+		if start != tc.start || end != tc.end || inserted != tc.inserted {
+			t.Errorf("%q -> %q: got (%d,%d,%q)", tc.old, tc.value, start, end, inserted)
+		}
+	}
+}

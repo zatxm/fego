@@ -5,6 +5,7 @@ package platform
 import (
 	"errors"
 	"fmt"
+	"image"
 	"runtime"
 	"sync"
 	"syscall"
@@ -47,7 +48,13 @@ type wglContext struct {
 
 func (w *windowsWindow) SetGPUEnabled(enabled bool) bool {
 	changed := w.graphics.set(enabled, w.newGPUContext)
+	if changed && w.GPUActive() {
+		w.frame = nil
+	}
 	return changed
+}
+func (w *windowsWindow) PresentGPURegions(size image.Point, paint func(func(*image.RGBA))) bool {
+	return w.graphics.presentRegions(size, paint)
 }
 func (w *windowsWindow) GPUActive() bool                       { return w.graphics.renderer != nil }
 func (w *windowsWindow) SetFragmentShader(source string) error { return w.graphics.shader(source) }

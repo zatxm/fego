@@ -294,34 +294,15 @@ func (v *view) frame(force bool) {
 		}
 	}
 	if v.region != nil {
-		v.bandMu.Lock()
-	}
-	for _, d := range v.dirty {
-		if v.region == nil {
+		if batch, ok := v.region.(interface{ PresentRegions(func(func(*image.RGBA))) }); ok {
+			batch.PresentRegions(v.paintBands)
+		} else {
+			v.paintBands(v.region.PresentRegion)
+		}
+	} else {
+		for _, d := range v.dirty {
 			v.paintRegion(v.img, d)
-			continue
 		}
-		rows := max(1, regionBandBytes/(4*d.Dx()))
-		for y := d.Min.Y; y < d.Max.Y; y += rows {
-			band := v.scratch(image.Rect(d.Min.X, y, d.Max.X, min(y+rows, d.Max.Y)))
-			v.paintRegion(band, band.Rect)
-			v.region.PresentRegion(band)
-		}
-	}
-	if v.region != nil {
-		if cap(v.bandMem) > smallBandBytes {
-			if v.bandNeed <= smallBandBytes {
-				v.releaseBand()
-			} else if v.bandTimer == nil {
-				v.bandTimer = time.AfterFunc(bandIdle, v.trimBand)
-			} else {
-				v.bandTimer.Reset(bandIdle)
-			}
-		}
-		v.bandNeed = 0
-		v.bandMu.Unlock()
-	}
-	if v.region == nil {
 		damage := v.dirty
 		if scroll != nil && !v.scrollPixels(scroll) {
 			damage = v.dirty[:1]
@@ -336,6 +317,29 @@ func (v *view) frame(force bool) {
 		v.updateCaret()
 		v.updateAccessibility()
 	}
+}
+
+func (v *view) paintBands(upload func(*image.RGBA)) {
+	v.bandMu.Lock()
+	for _, d := range v.dirty {
+		rows := max(1, regionBandBytes/(4*d.Dx()))
+		for y := d.Min.Y; y < d.Max.Y; y += rows {
+			band := v.scratch(image.Rect(d.Min.X, y, d.Max.X, min(y+rows, d.Max.Y)))
+			v.paintRegion(band, band.Rect)
+			upload(band)
+		}
+	}
+	if cap(v.bandMem) > smallBandBytes {
+		if v.bandNeed <= smallBandBytes {
+			v.releaseBand()
+		} else if v.bandTimer == nil {
+			v.bandTimer = time.AfterFunc(bandIdle, v.trimBand)
+		} else {
+			v.bandTimer.Reset(bandIdle)
+		}
+	}
+	v.bandNeed = 0
+	v.bandMu.Unlock()
 }
 
 func (v *view) damageCopiedOverlays(scroll *pixelScroll, dst image.Rectangle) {

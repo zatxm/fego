@@ -34,3 +34,26 @@ func nativeUTF16Text(data []uint16) (string, bool) {
 	}
 	return string(utf16.Decode(data)), true
 }
+
+// nativeTextChange computes a rune-indexed replacement without allocating rune
+// copies of the editor contents. Both strings have already been UTF-8 validated.
+func nativeTextChange(old, value string) (start, end int, inserted string) {
+	for len(old) != 0 && len(value) != 0 {
+		r, n := utf8.DecodeRuneInString(old)
+		s, m := utf8.DecodeRuneInString(value)
+		if r != s {
+			break
+		}
+		old, value = old[n:], value[m:]
+		start++
+	}
+	for len(old) != 0 && len(value) != 0 {
+		r, n := utf8.DecodeLastRuneInString(old)
+		s, m := utf8.DecodeLastRuneInString(value)
+		if r != s {
+			break
+		}
+		old, value = old[:len(old)-n], value[:len(value)-m]
+	}
+	return start, start + utf8.RuneCountInString(old), value
+}
