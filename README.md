@@ -129,6 +129,8 @@ Create trays and update their menus on the UI thread. From worker goroutines, us
 
 Use `Sheet` with `Document.ShowSheet` for a right-side panel. Use `Drawer` with `Document.ShowDrawer` for a bottom panel that you can drag down to dismiss.
 
+Use `ui.PaginationWithTotal(page, pages, total, onChange)` to show the page and record counts. Click the current page in the readout, type a page number, and press Enter to jump.
+
 ## Updating state and layout
 
 Create the widget tree once, then update existing widgets with methods such as `SetText`, `SetValue`, and `SetSelected`. Each widget belongs to one parent or window. Calling a setter does not invoke user interaction callbacks.

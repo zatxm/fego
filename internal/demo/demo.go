@@ -113,6 +113,7 @@ func Build() *ui.Document {
 			})),
 			ui.Card(ui.Text("输入与选择").FontSize(17).Bold(), ui.TextInput("").Placeholder("搜索你关心的内容…"), ui.TextArea("你好，fego。\n这里的文本框支持选择、剪贴板与撤销。"), ui.Select([]string{"简体中文", "English", "日本語"}, 0)),
 			ui.Card(ui.Text("日期与组合输入").FontSize(17).Bold(), ui.Field("交付日期", date.Element, ""), ui.Field("工作量", number.Element, ""), ui.Field("负责团队", combo.Element, "")),
+			ui.Card(ui.Text("分页").FontSize(17).Bold(), ui.PaginationWithTotal(5, 240, 23941, nil)),
 		).Grow(1),
 		ui.Column(advanced, ui.Card(ui.Text("虚拟列表").FontSize(17).Bold(), members.Element), ui.Card(ui.Text("可展开的树").FontSize(17).Bold(), ui.Tree(&ui.TreeNode{Label: "工作空间", Children: []*ui.TreeNode{{Label: "设计资源", Children: []*ui.TreeNode{{Label: "图标"}, {Label: "组件"}}}, {Label: "产品文档"}, {Label: "迭代计划"}}}).Height(180)), ui.Accordion(ui.Section{Title: "键盘操作", Open: true, Content: ui.Text("Tab 移动焦点，方向键调整选择。")}, ui.Section{Title: "按需绘制", Content: ui.Text("没有变化时，界面停止绘制。")})).Width(320),
 	).Gap(18).AlignItems(ui.Start)

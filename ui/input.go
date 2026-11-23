@@ -289,7 +289,9 @@ func (v *view) input(ev fego.Event) {
 			return
 		}
 		if ev.Key == "Escape" {
-			if v.popover.content != nil {
+			if e := v.focused; e != nil && e.pagination == pageEntry {
+				v.finishPageEdit(e)
+			} else if v.popover.content != nil {
 				trigger := v.popover.trigger
 				v.closePopover()
 				v.focus(trigger)
@@ -441,6 +443,9 @@ func (v *view) focus(e *Element) {
 	old := v.focused
 	v.focused = e
 	if old != nil {
+		if old.pagination == pageEntry {
+			old.closePageEntry()
+		}
 		v.invalidate(old, false)
 	}
 	if e != nil {
@@ -740,6 +745,9 @@ func (v *view) sortTable(e *Element, x float32) {
 func (v *view) inputInner(e *Element) Rect {
 	r := e.rect
 	inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
+	if e.pagination == pageEntry {
+		inner.X, inner.W = r.X+7, max(0, r.W-14)
+	}
 	if !e.multiline {
 		line := v.text.LineHeight(v.font(e), false)
 		inner.Y = r.Y + (r.H-line)/2
@@ -842,7 +850,7 @@ func (v *view) updateCaret() {
 	if h, ok := v.host.(interface {
 		SetTextInputState(string, int, int, bool, bool)
 	}); ok {
-		h.SetTextInputState(e.text, e.anchor, e.cursor, e.password, e.otpLength > 0)
+		h.SetTextInputState(e.text, e.anchor, e.cursor, e.password, e.otpLength > 0 || e.pagination == pageEntry)
 	}
 }
 
@@ -877,6 +885,16 @@ func (v *view) replaceSelection(e *Element, text string) {
 		return
 	}
 	a, b := min(e.cursor, e.anchor), max(e.cursor, e.anchor)
+	if e.pagination == pageEntry {
+		if len(e.text)-(b-a)+len(text) > e.count {
+			return
+		}
+		for i := range len(text) {
+			if text[i] < '0' || text[i] > '9' {
+				return
+			}
+		}
+	}
 	// Text input is bounded at its external clipboard/IME boundary.
 	length := 0
 	var state *editorState

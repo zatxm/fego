@@ -129,6 +129,8 @@ python3 -m http.server 8080 --directory /tmp/fego-web
 
 右侧面板使用 `Sheet` 和 `Document.ShowSheet`。底部面板使用 `Drawer` 和 `Document.ShowDrawer`，可向下拖动关闭。
 
+使用 `ui.PaginationWithTotal(page, pages, total, onChange)` 显示页码和总记录数。点击读数中的当前页，输入页码后按回车即可跳转。
+
 ## 更新状态与布局
 
 创建控件树后，使用 `SetText`、`SetValue`、`SetSelected` 等方法更新已有控件。一个控件只能放入一个父节点或窗口；程序调用 setter 不会触发用户交互回调。

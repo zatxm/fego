@@ -52,14 +52,20 @@ func (v *view) measure(e *Element) (w, h float32) {
 			h = max(h, sh)
 		}
 	case kButton:
-		w, h = v.text.Measure(e.text, font, s.bold)
-		if e.pagination == pageNumber {
-			w += 12
-		} else {
-			w += e.style.button.inset() * 2
-			if e.style.icon != noIcon && e.text != "" {
-				w += 20
+		if e.pagination != 0 {
+			w, h = pageButtonSize, pageButtonSize
+			switch e.pagination {
+			case pageJump:
+				w = pageEntryWidth(e.count, font)
+			case pageNumber:
+				w = max(w, float32(len(e.text))*font*.66+12)
 			}
+			break
+		}
+		w, h = v.text.Measure(e.text, font, s.bold)
+		w += e.style.button.inset() * 2
+		if e.style.icon != noIcon && e.text != "" {
+			w += 20
 		}
 		h = max(h+12, 36)
 	case kCheck, kRadio:
@@ -75,6 +81,8 @@ func (v *view) measure(e *Element) (w, h float32) {
 		h = 36
 		if e.multiline {
 			h = 120
+		} else if e.pagination == pageEntry {
+			w = pageEntryWidth(e.count, font)
 		}
 	case kSelect:
 		w = 180
