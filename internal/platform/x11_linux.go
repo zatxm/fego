@@ -141,6 +141,7 @@ var xl struct {
 	nextEvent            func(uintptr, *xEvent) int32
 	filterEvent          func(*xEvent, uintptr) int32
 	internAtom           func(uintptr, string, int32) uintptr
+	internAtoms          func(uintptr, **byte, int32, int32, *uintptr) int32
 	setProtocols         func(uintptr, uintptr, *uintptr, int32) int32
 	changeProperty       func(uintptr, uintptr, uintptr, uintptr, int32, int32, unsafe.Pointer, int32) int32
 	getProperty          func(uintptr, uintptr, uintptr, int64, int64, int32, uintptr, *uintptr, *int32, *uint64, *uint64, **byte) int32
@@ -195,13 +196,18 @@ func loadX11() error {
 			xLoad.err = err
 			return
 		}
+		// EGL starts on its own connection in another thread. libX11 1.8+ already
+		// does this; older versions require it before any other Xlib call.
+		if initThreads, err := purego.Dlsym(lib, "XInitThreads"); err == nil {
+			purego.SyscallN(initThreads)
+		}
 		for _, f := range []struct {
 			name string
 			dest any
 		}{
 			{"XTranslateCoordinates", &xl.translateCoordinates}, {"XOpenDisplay", &xl.openDisplay}, {"XCloseDisplay", &xl.closeDisplay}, {"XDefaultScreen", &xl.defaultScreen}, {"XRootWindow", &xl.rootWindow}, {"XDefaultVisual", &xl.defaultVisual}, {"XDefaultDepth", &xl.defaultDepth}, {"XConnectionNumber", &xl.connection}, {"XResourceManagerString", &xl.resources},
 			{"XCreateSimpleWindow", &xl.createWindow}, {"XDestroyWindow", &xl.destroyWindow}, {"XMapWindow", &xl.mapWindow}, {"XUnmapWindow", &xl.unmapWindow}, {"XSelectInput", &xl.selectInput}, {"XStoreName", &xl.storeName}, {"XResizeWindow", &xl.resizeWindow}, {"XCreateGC", &xl.createGC}, {"XFreeGC", &xl.freeGC}, {"XCreateImage", &xl.createImage}, {"XDestroyImage", &xl.destroyImage}, {"XCopyArea", &xl.copyArea},
-			{"XFlush", &xl.flush}, {"XPending", &xl.pending}, {"XNextEvent", &xl.nextEvent}, {"XFilterEvent", &xl.filterEvent}, {"XInternAtom", &xl.internAtom}, {"XSetWMProtocols", &xl.setProtocols}, {"XChangeProperty", &xl.changeProperty}, {"XGetWindowProperty", &xl.getProperty}, {"XDeleteProperty", &xl.deleteProperty}, {"XGetSelectionOwner", &xl.selectionOwner}, {"XSetSelectionOwner", &xl.setSelectionOwner}, {"XConvertSelection", &xl.convertSelection}, {"XSendEvent", &xl.sendEvent}, {"XFree", &xl.free},
+			{"XFlush", &xl.flush}, {"XPending", &xl.pending}, {"XNextEvent", &xl.nextEvent}, {"XFilterEvent", &xl.filterEvent}, {"XInternAtom", &xl.internAtom}, {"XInternAtoms", &xl.internAtoms}, {"XSetWMProtocols", &xl.setProtocols}, {"XChangeProperty", &xl.changeProperty}, {"XGetWindowProperty", &xl.getProperty}, {"XDeleteProperty", &xl.deleteProperty}, {"XGetSelectionOwner", &xl.selectionOwner}, {"XSetSelectionOwner", &xl.setSelectionOwner}, {"XConvertSelection", &xl.convertSelection}, {"XSendEvent", &xl.sendEvent}, {"XFree", &xl.free},
 			{"XCreateFontCursor", &xl.createCursor}, {"XDefineCursor", &xl.defineCursor}, {"XFreeCursor", &xl.freeCursor}, {"XLookupKeysym", &xl.lookupKeysym}, {"XLookupString", &xl.lookupString}, {"XSetLocaleModifiers", &xl.setLocaleModifiers}, {"XOpenIM", &xl.openIM}, {"XCloseIM", &xl.closeIM}, {"XCreateIC", &xl.createIC}, {"XDestroyIC", &xl.destroyIC}, {"XSetICFocus", &xl.setICFocus}, {"XUnsetICFocus", &xl.unsetICFocus}, {"Xutf8LookupString", &xl.utf8Lookup}, {"XVaCreateNestedList", &xl.nestedList}, {"XSetICValues", &xl.setICValues}, {"XSetErrorHandler", &xl.setErrorHandler}, {"XkbSetDetectableAutoRepeat", &xl.detectRepeat},
 		} {
 			p, err := purego.Dlsym(lib, f.name)
@@ -252,8 +258,10 @@ func loadX11() error {
 }
 
 type xBackend struct {
-	eglDisplay                                                                                   uintptr
+	eglDisplay, eglXDisplay                                                                      uintptr
 	eglContexts                                                                                  int
+	eglPending                                                                                   bool
+	eglDone                                                                                      chan eglStart
 	display, root, visual, im                                                                    uintptr
 	depth                                                                                        int32
 	fd                                                                                           int
@@ -277,13 +285,14 @@ type xBackend struct {
 	shmMajor                                                                                     uint8
 	shmCompletion                                                                                int32
 	shmProbing, shmFailed                                                                        bool
+	resizes                                                                                      bool
 	quit, ran                                                                                    bool
 	err                                                                                          error
 }
 
 type xWindow struct {
 	graphics                               gpuState
-	preferXRender                          bool
+	preferXRender, gpuFailed               bool
 	render                                 xRenderPresenter
 	b                                      *xBackend
 	id, gc, ic                             uintptr
@@ -300,10 +309,15 @@ type xWindow struct {
 	originKnown                            bool
 	width, height                          int
 	focused, textInput, closed, configured bool
-	preeditSpot                            xPoint
-	title                                  string
-	access                                 *atspiBridge
-	accessTried                            bool
+	resizePending, restoring               bool
+	// lost collects exposures folded into a pending Resize; unrestored is
+	// what the Resize handling has not presented again yet.
+	lost                    image.Rectangle
+	unrestored, restScratch []image.Rectangle
+	preeditSpot             xPoint
+	title                   string
+	access                  *atspiBridge
+	accessTried             bool
 }
 
 type xClipboardRead struct {
@@ -336,15 +350,10 @@ func New(dispatch func()) (Backend, error) {
 		return nil, fmt.Errorf("X11 depth %d is unsupported; use a true-color display", b.depth)
 	}
 	b.scale = xScale(xString(xl.resources(d)), os.Getenv("GDK_SCALE"))
-	b.wmDelete = xl.internAtom(d, "WM_DELETE_WINDOW", 0)
-	b.wmProtocols = xl.internAtom(d, "WM_PROTOCOLS", 0)
-	b.utf8 = xl.internAtom(d, "UTF8_STRING", 0)
-	b.clipboardAtom = xl.internAtom(d, "CLIPBOARD", 0)
-	b.targets = xl.internAtom(d, "TARGETS", 0)
-	b.textAtom = xl.internAtom(d, "TEXT", 0)
-	b.incr = xl.internAtom(d, "INCR", 0)
-	b.clipProperty = xl.internAtom(d, "_FEGO_CLIPBOARD", 0)
-	b.titleAtom = xl.internAtom(d, "_NET_WM_NAME", 0)
+	if !b.internWindowAtoms() {
+		b.release()
+		return nil, errors.New("cannot intern X11 window atoms")
+	}
 	b.im = xl.openIM(d, 0, 0, 0)
 	var supported int32
 	xl.detectRepeat(d, 1, &supported)
@@ -352,6 +361,31 @@ func New(dispatch func()) (Backend, error) {
 	xBackends.byDisplay[d] = b
 	xBackends.Unlock()
 	return b, nil
+}
+
+// Submit the startup atom requests together, avoiding a round trip per name.
+func (b *xBackend) internWindowAtoms() bool {
+	atoms := [...]struct {
+		name string
+		id   *uintptr
+	}{
+		{"WM_DELETE_WINDOW\x00", &b.wmDelete}, {"WM_PROTOCOLS\x00", &b.wmProtocols},
+		{"UTF8_STRING\x00", &b.utf8}, {"CLIPBOARD\x00", &b.clipboardAtom},
+		{"TARGETS\x00", &b.targets}, {"TEXT\x00", &b.textAtom}, {"INCR\x00", &b.incr},
+		{"_FEGO_CLIPBOARD\x00", &b.clipProperty}, {"_NET_WM_NAME\x00", &b.titleAtom},
+	}
+	var names [len(atoms)]*byte
+	var ids [len(atoms)]uintptr
+	for i, atom := range atoms {
+		names[i] = unsafe.StringData(atom.name)
+	}
+	if xl.internAtoms(b.display, &names[0], int32(len(names)), 0, &ids[0]) == 0 {
+		return false
+	}
+	for i, atom := range atoms {
+		*atom.id = ids[i]
+	}
+	return true
 }
 
 func xScale(resources, override string) float32 {
@@ -405,9 +439,6 @@ func (b *xBackend) Open(o Options, emit func(Event)) (Window, error) {
 	b.windows[id] = x
 	xl.selectInput(b.display, id, xWindowMask)
 	xl.setProtocols(b.display, id, &b.wmDelete, 1)
-	if b.im != 0 {
-		x.ic = xl.createIC(b.im, "inputStyle", 0x408, "clientWindow", id, "focusWindow", id, 0)
-	}
 	x.SetTitle(o.Title)
 	x.setIdentity(o)
 	xl.mapWindow(b.display, id)
@@ -430,6 +461,7 @@ func (b *xBackend) Run() error {
 			purego.SyscallN(xRaw.nextEvent, b.callArgs[:]...)
 			b.event(e)
 		}
+		b.emitResizes()
 		if !b.quit {
 			if err := b.wait(b.reclaimUploads(time.Now())); err != nil {
 				return err
@@ -521,6 +553,13 @@ func (b *xBackend) wait(timeout time.Duration) error {
 		return err
 	}
 	if b.woken.Swap(false) {
+		if b.eglPending {
+			select {
+			case r := <-b.eglDone:
+				b.finishEGL(r, nil)
+			default:
+			}
+		}
 		for _, w := range b.windows {
 			if w.access != nil {
 				w.access.drain(func(e Event) {
@@ -535,6 +574,71 @@ func (b *xBackend) wait(timeout time.Duration) error {
 		}
 	}
 	return nil
+}
+
+// resized defers Resize until the queued events are handled: during a drag
+// only the latest size is laid out, and its full repaint covers any Expose.
+func (w *xWindow) resized() {
+	w.resizePending = true
+	w.b.resizes = true
+}
+
+func (b *xBackend) emitResizes() {
+	if !b.resizes {
+		return
+	}
+	b.resizes = false
+	for _, w := range b.windows {
+		if !w.resizePending || w.closed {
+			continue
+		}
+		w.resizePending = false
+		lost := w.lost.Intersect(image.Rect(0, 0, w.width, w.height))
+		w.lost = image.Rectangle{}
+		w.unrestored = append(w.unrestored[:0], lost)
+		w.restoring = !lost.Empty()
+		w.emit(Event{Kind: Resize, Width: w.width, Height: w.height, Scale: b.scale})
+		w.restoring = false
+		// Content that repaints on Resize already restored the exposed area.
+		var left image.Rectangle
+		for _, r := range w.unrestored {
+			left = left.Union(r)
+		}
+		if !left.Empty() && !w.closed {
+			w.emit(Event{Kind: Paint, X: float32(left.Min.X), Y: float32(left.Min.Y), Width: left.Dx(), Height: left.Dy()})
+		}
+	}
+}
+
+// restore notes pixels presented while a deferred Resize is handled.
+func (w *xWindow) restore(r image.Rectangle) {
+	if !w.restoring {
+		return
+	}
+	left := w.restScratch[:0]
+	for _, u := range w.unrestored {
+		left = subtractRect(left, u, r)
+	}
+	w.restScratch, w.unrestored = w.unrestored[:0], left
+}
+
+// subtractRect appends the parts of a outside b, as at most four rects.
+func subtractRect(dst []image.Rectangle, a, b image.Rectangle) []image.Rectangle {
+	i := a.Intersect(b)
+	if i.Empty() {
+		return append(dst, a)
+	}
+	for _, r := range [...]image.Rectangle{
+		image.Rect(a.Min.X, a.Min.Y, a.Max.X, i.Min.Y),
+		image.Rect(a.Min.X, i.Max.Y, a.Max.X, a.Max.Y),
+		image.Rect(a.Min.X, i.Min.Y, i.Min.X, i.Max.Y),
+		image.Rect(i.Max.X, i.Min.Y, a.Max.X, i.Max.Y),
+	} {
+		if !r.Empty() {
+			dst = append(dst, r)
+		}
+	}
+	return dst
 }
 
 func (b *xBackend) Wake() {
@@ -556,6 +660,7 @@ func (b *xBackend) release() {
 	for _, w := range b.windows {
 		w.Close()
 	}
+	b.closeEGL()
 	if b.display != 0 {
 		for _, c := range b.cursors {
 			xl.freeCursor(b.display, c)
@@ -630,10 +735,12 @@ func (b *xBackend) event(raw *xEvent) {
 		lost, w.exposed = w.exposed, image.Rectangle{}
 		if !w.configured {
 			w.configured = true
-			lost = image.Rectangle{}
-			w.emit(Event{Kind: Resize, Width: w.width, Height: w.height, Scale: b.scale})
+			lost = image.Rect(0, 0, w.width, w.height)
+			w.resized()
 		}
-		if !w.closed {
+		if w.resizePending {
+			w.lost = w.lost.Union(lost)
+		} else {
 			w.emit(Event{Kind: Paint, X: float32(lost.Min.X), Y: float32(lost.Min.Y), Width: lost.Dx(), Height: lost.Dy()})
 		}
 	case xMap, xReparent:
@@ -646,7 +753,7 @@ func (b *xBackend) event(raw *xEvent) {
 		if !w.configured || int(e.Width) != w.width || int(e.Height) != w.height {
 			w.configured = true
 			w.width, w.height = int(e.Width), int(e.Height)
-			w.emit(Event{Kind: Resize, Width: w.width, Height: w.height, Scale: b.scale})
+			w.resized()
 		}
 		w.refreshAccessibility()
 	case xClientMessage:
@@ -812,15 +919,21 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 	if w.closed || src == nil || len(damage) == 0 {
 		return
 	}
+	bounds := src.Bounds()
 	if w.graphics.present(src, damage) {
+		for _, r := range damage {
+			w.restore(r.Intersect(bounds).Sub(bounds.Min))
+		}
 		return
 	}
-	bounds := src.Bounds()
 	if !w.presented || w.surfaceSize != bounds.Size() {
 		damage = []image.Rectangle{bounds}
 	}
 	if w.present(src, damage, bounds.Min) {
 		w.surfaceSize = bounds.Size()
+		for _, r := range damage {
+			w.restore(r.Intersect(bounds).Sub(bounds.Min))
+		}
 	}
 }
 
@@ -834,6 +947,7 @@ func (w *xWindow) PresentRegion(src *image.RGBA) {
 	if w.present(src, damage[:], image.Point{}) {
 		// A later full-surface Present must upload everything again.
 		w.surfaceSize = image.Point{}
+		w.restore(src.Rect)
 	}
 }
 
@@ -1003,7 +1117,7 @@ func xValidRGBA(src *image.RGBA) bool {
 
 func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
 	if w.graphics.renderer != nil {
-		return false
+		return !w.closed && w.graphics.scroll(r, delta)
 	}
 	if w.closed || !w.presented || delta.X != 0 || delta.Y == 0 || !r.In(image.Rect(0, 0, w.width, w.height)) {
 		return false
@@ -1101,6 +1215,11 @@ func (w *xWindow) TextInput(enabled bool, caret image.Rectangle) {
 	}
 	changed := w.textInput != enabled
 	w.textInput = enabled
+	// The input method is ready before interaction. Allocate a context only
+	// for windows that accept text, and reuse it across focus changes.
+	if changed && enabled && w.ic == 0 && w.b.im != 0 {
+		w.ic = xl.createIC(w.b.im, "inputStyle", 0x408, "clientWindow", w.id, "focusWindow", w.id, 0)
+	}
 	if w.ic == 0 {
 		return
 	}
@@ -1319,4 +1438,52 @@ func (b *xBackend) readClipboardProperty() {
 	if !t.incremental || count == 0 {
 		t.done = true
 	}
+}
+
+func (w *xWindow) SetMaximized(on bool) {
+	if w.closed {
+		return
+	}
+	b := w.b
+	atom := func(name string) uintptr { return xl.internAtom(b.display, name, 0) }
+	var raw xEvent
+	e := (*xClientEvent)(unsafe.Pointer(&raw))
+	e.Kind = xClientMessage
+	e.Display = b.display
+	e.Window = w.id
+	e.Message = atom("_NET_WM_STATE")
+	e.Format = 32
+	if on {
+		e.Data[0] = 1
+	}
+	e.Data[1] = int64(atom("_NET_WM_STATE_MAXIMIZED_VERT"))
+	e.Data[2] = int64(atom("_NET_WM_STATE_MAXIMIZED_HORZ"))
+	e.Data[3] = 1
+	xl.sendEvent(b.display, b.root, 0, (1<<19)|(1<<20), &raw)
+	xl.flush(b.display)
+}
+func (w *xWindow) Maximized() bool {
+	if w.closed {
+		return false
+	}
+	d := w.b.display
+	var kind uintptr
+	var format int32
+	var count, rest uint64
+	var data *byte
+	status := xl.getProperty(d, w.id, xl.internAtom(d, "_NET_WM_STATE", 0), 0, 128, 0, 4, &kind, &format, &count, &rest, &data)
+	if data == nil {
+		return false
+	}
+	defer xl.free(unsafe.Pointer(data))
+	if status != 0 || kind != 4 || format != 32 || count > 128 {
+		return false
+	}
+	vert, horz := xl.internAtom(d, "_NET_WM_STATE_MAXIMIZED_VERT", 0), xl.internAtom(d, "_NET_WM_STATE_MAXIMIZED_HORZ", 0)
+	var v, h bool
+	for _, a := range unsafe.Slice((*uintptr)(unsafe.Pointer(data)), int(count)) {
+		v = v || a == vert
+		h = h || a == horz
+	}
+	return v && h
 }

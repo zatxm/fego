@@ -4,6 +4,7 @@ package platform
 
 import (
 	"fmt"
+	"runtime"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
@@ -45,6 +46,12 @@ type glAPI struct {
 	textureSubImage  func(uint32, int32, int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
 	pixelStore       func(uint32, int32)
 	drawArrays       func(uint32, int32, int32)
+	// Optional: retained-texture scrolling falls back to repainting without them.
+	genFramebuffers    func(int32, *uint32)
+	bindFramebuffer    uintptr
+	framebufferTexture func(uint32, uint32, uint32, uint32, int32)
+	framebufferStatus  func(uint32) uint32
+	blitFramebuffer    uintptr
 }
 
 func loadGL(ctx glContext) (glAPI, error) {
@@ -88,6 +95,30 @@ func loadGL(ctx glContext) (glAPI, error) {
 		}
 		purego.RegisterFunc(entry.fn, address)
 	}
+	// Only X11 uses retained-texture scrolling. Other backends repaint on scroll.
+	if runtime.GOOS != "linux" {
+		return g, nil
+	}
+	g.bindFramebuffer = ctx.Proc("glBindFramebuffer")
+	if g.bindFramebuffer == 0 {
+		return g, nil
+	}
+	optional := []struct {
+		name string
+		fn   any
+	}{
+		{"glGenFramebuffers", &g.genFramebuffers},
+		{"glFramebufferTexture2D", &g.framebufferTexture},
+		{"glCheckFramebufferStatus", &g.framebufferStatus},
+	}
+	for _, entry := range optional {
+		address := ctx.Proc(entry.name)
+		if address == 0 {
+			return g, nil
+		}
+		purego.RegisterFunc(entry.fn, address)
+	}
+	g.blitFramebuffer = ctx.Proc("glBlitFramebuffer")
 	return g, nil
 }
 

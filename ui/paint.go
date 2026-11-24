@@ -16,6 +16,7 @@ type Painter struct {
 	clip             image.Rectangle
 	scale            float32
 	text             *fonttext.System
+	mono             **fonttext.System
 	theme            Theme
 	originX, originY float32
 	bounds           Rect
@@ -282,6 +283,16 @@ func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c
 		}
 	}
 }
+
+// UseMonospace selects a fixed-pitch face for subsequent Label and Measure
+// calls in this canvas draw. All canvases in the view share its glyph cache.
+func (p *Painter) UseMonospace() {
+	if *p.mono == nil {
+		*p.mono = fonttext.NewMonospace()
+	}
+	p.text = *p.mono
+}
+
 func (p *Painter) Label(s string, x, y, size float32, c Color, bold bool) {
 	// Widget colors are straight alpha; image/draw text expects premultiplied ink.
 	a := uint32(c.A)

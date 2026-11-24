@@ -75,6 +75,138 @@ func TestX11InitialDeviceSize(t *testing.T) {
 	}
 }
 
+// Without FEGO_GL_TEST the display must lack DRI3 (e.g. Xvfb) so the start fails.
+func TestX11DeferredGPUStart(t *testing.T) {
+	if os.Getenv("FEGO_X11_TEST") != "1" {
+		t.Skip("set FEGO_X11_TEST=1 on a dedicated X display")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	native, err := New(func() {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := native.(*xBackend)
+	defer b.release()
+	paints := 0
+	window, err := b.Open(Options{Title: "Deferred GPU", Width: 64, Height: 48}, func(e Event) {
+		if e.Kind == Paint {
+			paints++
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := window.(*xWindow)
+	if w.SetGPUEnabled(true) || w.GPUActive() || b.eglPending {
+		t.Fatal("requesting the GPU loaded the driver on the UI thread")
+	}
+	w.StartGPU()
+	if !b.eglPending {
+		t.Fatal("StartGPU did not begin in the background")
+	}
+	// The event loop finishes the start after the worker wakes it.
+	for deadline := time.Now().Add(10 * time.Second); b.eglPending; {
+		if time.Now().After(deadline) {
+			t.Fatal("EGL start did not finish")
+		}
+		if err := b.wait(10 * time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if os.Getenv("FEGO_GL_TEST") == "1" {
+		if !w.GPUActive() || paints != 1 {
+			t.Fatalf("active=%v paints=%d after the background start", w.GPUActive(), paints)
+		}
+		if !w.SetGPUEnabled(false) || w.GPUActive() {
+			t.Error("disabling a started GPU failed")
+		}
+		return
+	}
+	if w.GPUActive() || !w.gpuFailed || paints != 0 {
+		t.Fatal("failed start did not keep the CPU presenter")
+	}
+	if w.AwaitGPU() || b.eglPending {
+		t.Error("failed start was retried without re-enabling")
+	}
+	if !w.SetGPUEnabled(false) || w.SetGPUEnabled(true) || w.gpuFailed || w.AwaitGPU() || !w.gpuFailed {
+		t.Error("re-enabling did not retry the start")
+	}
+}
+
+func TestX11CoalescesResizes(t *testing.T) {
+	if os.Getenv("FEGO_X11_TEST") != "1" {
+		t.Skip("set FEGO_X11_TEST=1 on a dedicated X display")
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	lib, err := purego.Dlopen("libX11.so.6", purego.RTLD_NOW|purego.RTLD_LOCAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resize func(uintptr, uintptr, uint32, uint32) int32
+	var syncX func(uintptr, int32) int32
+	purego.RegisterLibFunc(&resize, lib, "XResizeWindow")
+	purego.RegisterLibFunc(&syncX, lib, "XSync")
+	for _, repaints := range []bool{true, false} {
+		native, err := New(func() {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		b := native.(*xBackend)
+		var w *xWindow
+		var resizes []Event
+		var paints []image.Rectangle
+		window, err := b.Open(Options{Title: "Coalesced resize", Width: 120, Height: 80}, func(e Event) {
+			switch e.Kind {
+			case Resize:
+				resizes = append(resizes, e)
+				if repaints && w != nil {
+					w.PresentRegion(image.NewRGBA(image.Rect(0, 0, e.Width, e.Height)))
+				}
+			case Paint:
+				paints = append(paints, image.Rect(int(e.X), int(e.Y), int(e.X)+e.Width, int(e.Y)+e.Height))
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w = window.(*xWindow)
+		pump := func() {
+			syncX(b.display, 0)
+			for b.pending() {
+				var e xEvent
+				xl.nextEvent(b.display, &e)
+				b.event(&e)
+			}
+			b.emitResizes()
+		}
+		for deadline := time.Now().Add(5 * time.Second); !w.configured; pump() {
+			if time.Now().After(deadline) {
+				t.Fatal("window was not mapped")
+			}
+		}
+		if len(resizes) != 2 || (len(paints) == 0) == !repaints {
+			t.Fatalf("repaints=%v: first map sent %d Resize and paints %v", repaints, len(resizes), paints)
+		}
+		resizes, paints = nil, nil
+		for _, size := range [][2]uint32{{130, 90}, {150, 110}, {140, 120}} {
+			resize(b.display, w.id, size[0], size[1])
+		}
+		pump()
+		if len(resizes) != 1 || resizes[0].Width != 140 || resizes[0].Height != 120 {
+			t.Fatalf("queued resizes were not coalesced to the last size: %v", resizes)
+		}
+		if repaints && len(paints) != 0 {
+			t.Errorf("exposure already repainted on Resize was painted again: %v", paints)
+		}
+		if !repaints && (len(paints) != 1 || !image.Rect(120, 0, 140, 120).In(paints[0])) {
+			t.Errorf("exposed area not reported after Resize: %v", paints)
+		}
+		b.release()
+	}
+}
+
 func TestX11DamageCopy(t *testing.T) {
 	src := image.NewRGBA(image.Rect(10, 20, 13, 23))
 	src.SetRGBA(11, 21, color.RGBA{R: 10, G: 20, B: 30, A: 255})
@@ -331,15 +463,20 @@ func testX11Native(t *testing.T, shm bool) {
 				}
 				w.preferXRender = false
 				if os.Getenv("FEGO_GL_TEST") == "1" {
-					if !w.SetGPUEnabled(true) {
+					w.SetGPUEnabled(true)
+					if !w.AwaitGPU() || !w.GPUActive() {
 						t.Error("hardware OpenGL did not initialize")
 					} else {
 						if !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) {
+							// Mix tightly packed and strided bands in the same frame.
 							upload(img.SubImage(image.Rect(0, 0, 160, 53)).(*image.RGBA))
-							upload(img.SubImage(image.Rect(0, 53, 160, 100)).(*image.RGBA))
+							upload(img.SubImage(image.Rect(0, 53, 80, 100)).(*image.RGBA))
+							upload(img.SubImage(image.Rect(80, 53, 160, 100)).(*image.RGBA))
 						}) || !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) { upload(region) }) {
 							t.Error("OpenGL region upload or swap failed")
 						}
+						// Presents use EGL's own connection; wait for them before reading back.
+						syncX(b.eglXDisplay, 0)
 						actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
 						if actual == nil {
 							t.Error("OpenGL readback failed")
@@ -349,6 +486,26 @@ func testX11Native(t *testing.T, shm bool) {
 							}
 							xl.destroyImage(actual)
 						}
+						// Scrolling copies retained texture pixels; only the frame is swapped again.
+						for _, step := range []struct{ dy, from, to int32 }{{-7, 61, 54}, {7, 54, 61}} {
+							if !w.ScrollPixels(image.Rect(0, 10, 160, 90), image.Pt(0, int(step.dy))) ||
+								!w.PresentGPURegions(img.Rect.Size(), func(func(*image.RGBA)) {}) {
+								t.Error("OpenGL scroll copy rejected")
+								break
+							}
+							syncX(b.eglXDisplay, 0)
+							actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+							if actual == nil {
+								t.Error("OpenGL scroll readback failed")
+								break
+							}
+							moved, vacated, outside := getPixel(actual, 51, step.to)&0xffffff, getPixel(actual, 51, step.from)&0xffffff, getPixel(actual, 51, 5)&0xffffff
+							if moved != 0x624c36 || vacated != 0xc81e28 || outside != 0x00c800 {
+								t.Errorf("OpenGL scroll %d moved %#x vacated %#x outside %#x", step.dy, moved, vacated, outside)
+							}
+							xl.destroyImage(actual)
+						}
+						checkGLScrollResize(t, w, img)
 						w.SetGPUEnabled(false)
 					}
 				}
@@ -428,7 +585,17 @@ func testX11Native(t *testing.T, shm bool) {
 			if got := w.Clipboard(); got != "中文 clipboard 🙂" {
 				t.Errorf("clipboard=%q", got)
 			}
-			w.TextInput(true, image.Rect(10, 10, 11, 28))
+			if w.ic != 0 {
+				t.Error("window allocated an input context before text input was enabled")
+			}
+			caret := image.Rect(10, 10, 11, 28)
+			w.TextInput(true, caret)
+			im, ic := b.im, w.ic
+			w.TextInput(false, image.Rectangle{})
+			w.TextInput(true, caret)
+			if b.im != im || w.ic != ic {
+				t.Error("refocusing text input did not reuse its input context")
+			}
 			focus(b.display, w.id, 1, 0)
 			for _, kind := range []int32{xButtonPress, xButtonRelease, xMotion, xKeyPress, xKeyRelease} {
 				var raw xEvent
@@ -599,5 +766,35 @@ func TestX11ClipboardInterop(t *testing.T) {
 	}()
 	if err := b.Run(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Query the driver after replacing the frame texture and after the next scroll.
+func checkGLScrollResize(t *testing.T, w *xWindow, img *image.RGBA) {
+	t.Helper()
+	p := w.graphics.renderer
+	var level func(uint32, int32, uint32, *int32)
+	purego.RegisterFunc(&level, p.ctx.Proc("glGetTexLevelParameteriv"))
+	scratchSize := func() image.Point {
+		var width, height int32
+		p.gl.bindTexture(0x0de1, p.scratch)
+		level(0x0de1, 0, 0x1000, &width)
+		level(0x0de1, 0, 0x1001, &height)
+		p.gl.bindTexture(0x0de1, p.texture)
+		return image.Pt(int(width), int(height))
+	}
+
+	small := image.Rect(0, 0, 40, 25)
+	if scratchSize() != image.Pt(160, 73) || !w.PresentGPURegions(small.Size(), func(upload func(*image.RGBA)) {
+		upload(img.SubImage(small).(*image.RGBA))
+	}) {
+		t.Error("OpenGL scroll texture or frame resize failed")
+		return
+	}
+	if size := scratchSize(); size != (image.Point{}) {
+		t.Errorf("OpenGL retained %v scroll texture after window shrink", size)
+	}
+	if !w.ScrollPixels(small, image.Pt(0, 4)) || scratchSize() != image.Pt(40, 21) {
+		t.Error("OpenGL did not regrow its scroll texture")
 	}
 }

@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
 )
 
 type gpuState struct {
@@ -25,6 +27,10 @@ func (s *gpuState) set(enabled bool, create func() (glContext, error)) bool {
 		s.close()
 		return true
 	}
+	return s.open(create)
+}
+
+func (s *gpuState) open(create func() (glContext, error)) bool {
 	ctx, err := create()
 	if err != nil {
 		return false
@@ -64,11 +70,26 @@ func (s *gpuState) shader(source string) error {
 }
 
 type glPresenter struct {
-	ctx        glContext
-	gl         glAPI
-	program    uint32
-	maxTexture int32
-	size       image.Point
+	ctx          glContext
+	gl           glAPI
+	program      uint32
+	maxTexture   int32
+	unpackLength int32
+	size         image.Point
+	texture      uint32
+	// Scrolling copies through scratch: framebuffers[0] reads or draws the
+	// frame texture, framebuffers[1] the scratch texture of scratchSize.
+	framebuffers [2]uint32
+	scratch      uint32
+	scratchSize  image.Point
+	blitArgs     [10]uintptr
+	copyFailed   bool
+	// damage collects this frame's changed rects, top-left origin. A custom
+	// shader may spread changes, and a new texture is all new: swap everything.
+	damage     []image.Rectangle
+	fullDamage bool
+	custom     bool
+	swapRects  []int32
 }
 
 func newGLPresenter(ctx glContext) (*glPresenter, error) {
@@ -95,6 +116,7 @@ func newGLPresenter(ctx glContext) (*glPresenter, error) {
 	g.bindVertexArray(vao)
 	g.genTextures(1, &texture)
 	g.bindTexture(0x0de1, texture)
+	p.texture = texture
 	for _, key := range []uint32{0x2800, 0x2801} {
 		g.textureParameter(0x0de1, key, 0x2600)
 	}
@@ -150,6 +172,8 @@ func (p *glPresenter) shader(source string) error {
 	}
 	g.useProgram(program)
 	g.uniform1i(g.uniformLocation(program, "frameTexture"), 0)
+	p.custom = source != FrameFragmentDefault
+	p.fullDamage = true
 	if p.program != 0 {
 		g.deleteProgram(p.program)
 	}
@@ -157,17 +181,38 @@ func (p *glPresenter) shader(source string) error {
 	return nil
 }
 
+// A zero unpack row length lets tightly packed bands share the same GL state.
+func (p *glPresenter) setUnpackLength(length int32) {
+	if length != p.unpackLength {
+		p.gl.pixelStore(0x0cf2, length)
+		p.unpackLength = length
+	}
+}
+
+func (p *glPresenter) resize(size image.Point, pixels unsafe.Pointer) {
+	g := &p.gl
+	// Trim a scroll texture that is more than twice the new window area.
+	// Small resizes continue to reuse it.
+	if int64(p.scratchSize.X)*int64(p.scratchSize.Y) > 2*int64(size.X)*int64(size.Y) {
+		g.bindTexture(0x0de1, p.scratch)
+		g.textureImage(0x0de1, 0, 0x8058, 0, 0, 0, 0x1908, 0x1401, nil)
+		g.bindTexture(0x0de1, p.texture)
+		p.scratchSize = image.Point{}
+	}
+	g.viewport(0, 0, int32(size.X), int32(size.Y))
+	g.textureImage(0x0de1, 0, 0x8058, int32(size.X), int32(size.Y), 0, 0x1908, 0x1401, pixels)
+	p.size = size
+}
+
 func (p *glPresenter) present(img *image.RGBA, damage []image.Rectangle) bool {
 	if img == nil || img.Rect.Empty() || max(img.Rect.Dx(), img.Rect.Dy()) > int(p.maxTexture) || !p.ctx.MakeCurrent() {
 		return false
 	}
-	g := p.gl
+	g := &p.gl
 	size := img.Rect.Size()
-	g.pixelStore(0x0cf2, int32(img.Stride/4))
+	p.setUnpackLength(int32(img.Stride / 4))
 	if size != p.size {
-		g.viewport(0, 0, int32(size.X), int32(size.Y))
-		g.textureImage(0x0de1, 0, 0x8058, int32(size.X), int32(size.Y), 0, 0x1908, 0x1401, unsafe.Pointer(unsafe.SliceData(img.Pix)))
-		p.size = size
+		p.resize(size, unsafe.Pointer(unsafe.SliceData(img.Pix)))
 	} else {
 		for _, r := range damage {
 			r = r.Intersect(img.Rect)
@@ -179,6 +224,7 @@ func (p *glPresenter) present(img *image.RGBA, damage []image.Rectangle) bool {
 	}
 	runtime.KeepAlive(img)
 	g.drawArrays(4, 0, 3)
+	p.damage, p.fullDamage = p.damage[:0], false
 	return g.getError() == 0 && p.ctx.Swap()
 }
 
@@ -193,17 +239,42 @@ func (s *gpuState) presentRegions(size image.Point, paint func(func(*image.RGBA)
 	}
 	g := &p.gl
 	if size != p.size {
-		g.viewport(0, 0, int32(size.X), int32(size.Y))
-		g.textureImage(0x0de1, 0, 0x8058, int32(size.X), int32(size.Y), 0, 0x1908, 0x1401, nil)
-		p.size = size
+		p.resize(size, nil)
+		p.fullDamage = true
 	}
 	paint(p.uploadRegion)
 	g.drawArrays(4, 0, 3)
-	if g.getError() != 0 || !p.ctx.Swap() {
+	if g.getError() != 0 || !p.swap() {
 		s.close()
 		return false
 	}
 	return true
+}
+
+// Beyond this many rects the display server gets one bounding rect.
+const maxSwapRects = 16
+
+func (p *glPresenter) swap() bool {
+	damage := p.damage
+	p.damage = p.damage[:0]
+	full := p.fullDamage || p.custom
+	p.fullDamage = false
+	swapper, ok := p.ctx.(interface{ SwapDamage([]int32) bool })
+	if full || !ok || len(damage) == 0 {
+		return p.ctx.Swap()
+	}
+	if len(damage) > maxSwapRects {
+		for _, r := range damage[1:] {
+			damage[0] = damage[0].Union(r)
+		}
+		damage = damage[:1]
+	}
+	rects := p.swapRects[:0]
+	for _, r := range damage {
+		rects = append(rects, int32(r.Min.X), int32(p.size.Y-r.Max.Y), int32(r.Dx()), int32(r.Dy()))
+	}
+	p.swapRects = rects
+	return swapper.SwapDamage(rects)
 }
 
 func (p *glPresenter) uploadRegion(img *image.RGBA) {
@@ -215,7 +286,84 @@ func (p *glPresenter) uploadRegion(img *image.RGBA) {
 		return
 	}
 	g := &p.gl
-	g.pixelStore(0x0cf2, int32(img.Stride/4))
+	p.damage = append(p.damage, r)
+	length := int32(0)
+	if img.Stride != 4*r.Dx() {
+		length = int32(img.Stride / 4)
+	}
+	p.setUnpackLength(length)
 	g.textureSubImage(0x0de1, 0, int32(r.Min.X), int32(r.Min.Y), int32(r.Dx()), int32(r.Dy()), 0x1908, 0x1401, unsafe.Pointer(&img.Pix[img.PixOffset(r.Min.X, r.Min.Y)]))
 	runtime.KeepAlive(img)
+}
+
+// These integer-only GL calls run several times per scroll. Reuse their
+// argument storage instead of boxing coordinates for each driver call.
+func (p *glPresenter) bindFramebuffer(target, buffer uint32) {
+	p.blitArgs[0], p.blitArgs[1] = uintptr(target), uintptr(buffer)
+	purego.SyscallN(p.gl.bindFramebuffer, p.blitArgs[:2]...)
+}
+
+func (p *glPresenter) blit(src, dst image.Rectangle) {
+	p.blitArgs = [10]uintptr{
+		uintptr(src.Min.X), uintptr(src.Min.Y), uintptr(src.Max.X), uintptr(src.Max.Y),
+		uintptr(dst.Min.X), uintptr(dst.Min.Y), uintptr(dst.Max.X), uintptr(dst.Max.Y),
+		0x4000, 0x2600, // GL_COLOR_BUFFER_BIT, GL_NEAREST
+	}
+	purego.SyscallN(p.gl.blitFramebuffer, p.blitArgs[:]...)
+}
+
+// scroll moves retained frame pixels within r by delta on the GPU. A blit
+// between overlapping areas of one texture is undefined, so it goes through
+// a scratch texture.
+func (s *gpuState) scroll(r image.Rectangle, delta image.Point) bool {
+	p := s.renderer
+	if p == nil || p.copyFailed || p.gl.blitFramebuffer == 0 || delta.X != 0 || delta.Y == 0 || !r.In(image.Rectangle{Max: p.size}) {
+		return false
+	}
+	dst := r.Intersect(r.Add(delta))
+	if dst.Empty() || !p.ctx.MakeCurrent() {
+		return false
+	}
+	src := dst.Sub(delta)
+	g := &p.gl
+	const read, draw, color, texture2D = 0x8ca8, 0x8ca9, 0x8ce0, 0x0de1
+	if p.framebuffers[0] == 0 {
+		g.genFramebuffers(2, &p.framebuffers[0])
+		g.genTextures(1, &p.scratch)
+	}
+	size := src.Size()
+	grew := size.X > p.scratchSize.X || size.Y > p.scratchSize.Y
+	if grew {
+		p.scratchSize = image.Pt(max(size.X, p.scratchSize.X), max(size.Y, p.scratchSize.Y))
+		g.bindTexture(texture2D, p.scratch)
+		g.textureImage(texture2D, 0, 0x8058, int32(p.scratchSize.X), int32(p.scratchSize.Y), 0, 0x1908, 0x1401, nil)
+		g.bindTexture(texture2D, p.texture)
+	}
+	frame, scratch := p.framebuffers[0], p.framebuffers[1]
+	p.bindFramebuffer(read, frame)
+	p.bindFramebuffer(draw, scratch)
+	if grew {
+		// Attachments survive unbinding. Validate them when allocating storage,
+		// so steady scrolling only needs to bind and copy.
+		g.framebufferTexture(read, color, texture2D, p.texture, 0)
+		g.framebufferTexture(draw, color, texture2D, p.scratch, 0)
+		if g.framebufferStatus(read) != 0x8cd5 || g.framebufferStatus(draw) != 0x8cd5 {
+			p.bindFramebuffer(0x8d40, 0)
+			p.copyFailed = true
+			g.getError() // A failed copy must not poison the fallback repaint.
+			return false
+		}
+	}
+	scratchRect := image.Rectangle{Max: size}
+	p.blit(src, scratchRect)
+	p.bindFramebuffer(read, scratch)
+	p.bindFramebuffer(draw, frame)
+	p.blit(scratchRect, dst)
+	p.bindFramebuffer(0x8d40, 0)
+	if g.getError() != 0 {
+		p.copyFailed = true
+		return false
+	}
+	p.damage = append(p.damage, dst)
+	return true
 }

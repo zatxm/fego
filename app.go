@@ -299,10 +299,14 @@ func (w *Window) event(e Event) {
 
 // SetGPUEnabled switches hardware presentation on or off on the UI thread.
 func (w *Window) SetGPUEnabled(enabled bool) {
-	if native, ok := w.native.(platform.Graphics); ok && !w.closed && native.SetGPUEnabled(enabled) {
-		if view, ok := w.view.(interface{ ResetPresenter() }); ok {
-			view.ResetPresenter()
-		}
+	native, ok := w.native.(platform.Graphics)
+	if !ok || w.closed {
+		return
+	}
+	changed := w.awaitGPU()
+	changed = native.SetGPUEnabled(enabled) || changed
+	if w.awaitGPU() || changed {
+		w.resetPresenter()
 		w.event(Event{Kind: Paint})
 	}
 }
@@ -310,7 +314,28 @@ func (w *Window) SetGPUEnabled(enabled bool) {
 // GPUActive reports whether this window is currently presenting through a GPU.
 func (w *Window) GPUActive() bool {
 	native, ok := w.native.(platform.Graphics)
-	return ok && !w.closed && native.GPUActive()
+	if !ok || w.closed {
+		return false
+	}
+	if w.awaitGPU() {
+		// Repaint after the caller returns; the reset keeps frames until then full.
+		w.resetPresenter()
+		w.Invalidate()
+	}
+	return native.GPUActive()
+}
+
+// awaitGPU completes hardware setup that NewWindow started in the background,
+// so explicit GPU calls observe the same state as a synchronous start.
+func (w *Window) awaitGPU() bool {
+	native, ok := w.native.(interface{ AwaitGPU() bool })
+	return ok && native.AwaitGPU()
+}
+
+func (w *Window) resetPresenter() {
+	if view, ok := w.view.(interface{ ResetPresenter() }); ok {
+		view.ResetPresenter()
+	}
 }
 
 // SetFragmentShader compiles a GLSL fragment body on the UI thread. The body
@@ -320,6 +345,10 @@ func (w *Window) SetFragmentShader(source string) error {
 		return errors.New("fego: invalid fragment shader source")
 	}
 	if native, ok := w.native.(platform.ShaderPresenter); ok && !w.closed {
+		if w.awaitGPU() {
+			w.resetPresenter()
+			w.Invalidate()
+		}
 		if err := native.SetFragmentShader(source); err != nil {
 			return err
 		}
@@ -378,9 +407,7 @@ func (w *Window) PresentRegions(paint func(func(*image.RGBA))) {
 			// A lost texture needs a full CPU repaint after the current frame unwinds.
 			w.app.Post(func() {
 				if !w.closed {
-					if v, ok := w.view.(interface{ ResetPresenter() }); ok {
-						v.ResetPresenter()
-					}
+					w.resetPresenter()
 					w.event(Event{Kind: Paint})
 				}
 			})
@@ -396,6 +423,15 @@ func (w *Window) PresentRegions(paint func(func(*image.RGBA))) {
 func (w *Window) presented() {
 	if !w.ready {
 		w.ready = true
+		if native, ok := w.native.(interface{ StartGPU() }); ok {
+			// Start the driver after the first frame, so it competes with neither
+			// that frame's work nor its display server round trips.
+			w.app.Post(func() {
+				if !w.closed {
+					native.StartGPU()
+				}
+			})
+		}
 		for _, fn := range w.onReady {
 			fn()
 		}
@@ -583,4 +619,17 @@ func (w *Window) destroy() {
 	if len(w.app.windows) == 0 && !w.app.stopped && !w.app.options.KeepAlive {
 		w.app.quit()
 	}
+}
+
+// SetMaximized uses the desktop work area, leaving system panels available.
+func (w *Window) SetMaximized(on bool) {
+	if n, ok := w.native.(interface{ SetMaximized(bool) }); ok {
+		n.SetMaximized(on)
+	}
+}
+func (w *Window) Maximized() bool {
+	if n, ok := w.native.(interface{ Maximized() bool }); ok {
+		return n.Maximized()
+	}
+	return false
 }

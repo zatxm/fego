@@ -4,10 +4,13 @@ package platform
 
 import (
 	"image"
+	"reflect"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/godbus/dbus/v5/introspect"
 	"github.com/godbus/dbus/v5/prop"
 )
 
@@ -81,6 +84,46 @@ func TestTrayDBus(t *testing.T) {
 	claim()
 	destination := waitRegistration()
 	waitAvailable(true)
+	for _, endpoint := range []struct {
+		path dbus.ObjectPath
+		name string
+		impl any
+	}{{sniPath, sniIface, &linuxItem{tray}}, {menuPath, menuIface, &linuxMenu{tray}}} {
+		object := host.Object(destination, endpoint.path)
+		node, err := introspect.Call(object)
+		if err != nil || node.Name != string(endpoint.path) || len(node.Interfaces) != 4 {
+			t.Fatalf("introspection for %s: %v, %v", endpoint.path, node, err)
+		}
+		methods := map[string][]introspect.Method{
+			endpoint.name:                  introspect.Methods(endpoint.impl),
+			propsIface:                     introspect.Methods(&linuxProps{}),
+			introspect.IntrospectData.Name: introspect.IntrospectData.Methods,
+			introspect.PeerData.Name:       introspect.PeerData.Methods,
+		}
+		all := atspiTestCall(t, object, propsIface+".GetAll", endpoint.name).Body[0].(map[string]dbus.Variant)
+		for _, iface := range node.Interfaces {
+			want, exists := methods[iface.Name]
+			if !exists || !slices.EqualFunc(iface.Methods, want, func(a, b introspect.Method) bool {
+				return a.Name == b.Name && slices.Equal(a.Args, b.Args)
+			}) {
+				t.Fatalf("method signatures differ for %s", iface.Name)
+			}
+			delete(methods, iface.Name)
+			if iface.Name != endpoint.name {
+				continue
+			}
+			for _, prop := range iface.Properties {
+				one := atspiTestCall(t, object, propsIface+".Get", iface.Name, prop.Name).Body[0].(dbus.Variant)
+				if prop.Access != "read" || one.Signature().String() != prop.Type || !reflect.DeepEqual(one, all[prop.Name]) {
+					t.Fatalf("%s.%s: single and bulk property reads disagree with schema %s", iface.Name, prop.Name, prop.Type)
+				}
+				delete(all, prop.Name)
+			}
+			if len(all) != 0 {
+				t.Fatalf("properties missing from %s introspection: %v", iface.Name, all)
+			}
+		}
+	}
 	menu := host.Object(destination, menuPath)
 	var rev uint32
 	var layout menuLayout
@@ -113,4 +156,14 @@ func TestTrayDBus(t *testing.T) {
 		t.Fatalf("registered a different tray: %q", got)
 	}
 	waitAvailable(true)
+}
+
+func BenchmarkTrayGetTitle(b *testing.B) {
+	p := &linuxProps{&linuxTray{state: TrayState{Title: "Fego"}}, sniIface}
+	b.ReportAllocs()
+	for b.Loop() {
+		if value, err := p.Get(sniIface, "Title"); err != nil || value.Value() != "Fego" {
+			b.Fatal(value, err)
+		}
+	}
 }

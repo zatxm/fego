@@ -52,20 +52,26 @@ func cellColor(value float64) ui.Color {
 }
 
 type recorder struct {
-	warmup, frames, seen int
-	ready, armed, done   bool
-	last, started, next  time.Time
-	intervals            []int64
-	schedule             func(time.Duration)
-	stopProfile          func()
+	warmup, frames, seen             int
+	ready, armed, done               bool
+	last, started, next, updateStart time.Time
+	intervals, updateTimes           []int64
+	schedule                         func(time.Duration)
+	backend                          func() string
+	stopProfile                      func()
 }
 
 func (r *recorder) frame() {
 	now := time.Now()
 	if !r.ready {
 		r.ready = true
-		fmt.Println(`renderer {"backend":"cpu"}`)
 		fmt.Println("ready")
+		// Reported after ready: querying waits for a GPU start still in progress.
+		backend := "cpu"
+		if r.backend != nil {
+			backend = r.backend()
+		}
+		fmt.Printf("renderer {\"backend\":%q}\n", backend)
 		r.next = now
 	} else if r.armed {
 		r.armed = false
@@ -75,13 +81,16 @@ func (r *recorder) frame() {
 			fmt.Println("start")
 		} else if r.seen > r.warmup {
 			r.intervals = append(r.intervals, now.Sub(r.last).Microseconds())
+			r.updateTimes = append(r.updateTimes, now.Sub(r.updateStart).Microseconds())
 			if len(r.intervals) == r.frames {
 				slices.Sort(r.intervals)
+				slices.Sort(r.updateTimes)
 				if r.stopProfile != nil {
 					r.stopProfile()
 				}
-				fmt.Printf("done {\"frames\":%d,\"wallUs\":%d,\"p50Us\":%d,\"p99Us\":%d,\"maxUs\":%d}\n", r.frames,
-					now.Sub(r.started).Microseconds(), r.intervals[r.frames/2], r.intervals[r.frames*99/100], r.intervals[r.frames-1])
+				fmt.Printf("done {\"frames\":%d,\"wallUs\":%d,\"p50Us\":%d,\"p99Us\":%d,\"maxUs\":%d,\"updateP50Us\":%d,\"updateP99Us\":%d}\n", r.frames,
+					now.Sub(r.started).Microseconds(), r.intervals[r.frames/2], r.intervals[r.frames*99/100], r.intervals[r.frames-1],
+					r.updateTimes[r.frames/2], r.updateTimes[r.frames*99/100])
 				r.done = true
 			}
 		}
@@ -125,6 +134,12 @@ func (h *measuredHost) PresentRegion(img *image.RGBA) {
 	h.Host.(regionHost).PresentRegion(img)
 	h.presented = true
 }
+func (h *measuredHost) PresentRegions(paint func(func(*image.RGBA))) {
+	h.Host.(interface {
+		PresentRegions(func(func(*image.RGBA)))
+	}).PresentRegions(paint)
+	h.presented = true
+}
 
 type measuredView struct {
 	fego.View
@@ -138,6 +153,11 @@ func (v *measuredView) Event(event fego.Event) {
 	if v.host.presented {
 		v.rec.frame()
 	}
+}
+
+// A backend switch discards the previous presenter's retained pixels.
+func (v *measuredView) ResetPresenter() {
+	v.View.(interface{ ResetPresenter() }).ResetPresenter()
 }
 
 // Forward retained invalidations without turning them into native expose events.
@@ -195,7 +215,7 @@ func scene(name string) (*ui.Element, func(int), int, int) {
 			}
 		}
 		return ui.Grid(20, cells...).Gap(0).Fill(), advance, 800, 600
-	case "list":
+	case "list", "list-selection":
 		return ui.List(100000, rowLabel).Fill().FontSize(13), nil, 800, 600
 	default:
 		return componentScene(name)
@@ -210,19 +230,43 @@ func main() {
 	root, advance, width, height := scene(name)
 	rec := &recorder{warmup: setting("BENCH_WARMUP", 120), frames: setting("BENCH_FRAMES", 600)}
 	rec.intervals = make([]int64, 0, rec.frames)
+	rec.updateTimes = make([]int64, 0, rec.frames)
 	startProfile(rec)
 	content := &measuredContent{doc: ui.View(root), rec: rec}
+	if name == "list-selection" {
+		advance = func(frame int) {
+			if frame == 1 {
+				content.view.Event(fego.Event{Kind: fego.PointerDown, Button: 1, X: 40, Y: 60})
+				content.view.Event(fego.Event{Kind: fego.PointerUp, Button: 1, X: 40, Y: 60})
+			}
+			key := "ArrowDown"
+			if frame%2 == 0 {
+				key = "ArrowUp"
+			}
+			content.view.Event(fego.Event{Kind: fego.KeyDown, Key: key})
+		}
+	}
 	app := fego.NewApp()
 	app.WhenReady(func() {
-		window, err := app.NewWindow(fego.WindowOptions{Title: "Benchmark", Width: width, Height: height, Content: content})
+		// FEGO_RENDERER=gpu or xrender opts in to hardware presentation.
+		renderer := os.Getenv("FEGO_RENDERER")
+		window, err := app.NewWindow(fego.WindowOptions{Title: "Benchmark", Width: width, Height: height, Content: content,
+			GPU: renderer == "gpu" || renderer == "xrender", X11Render: renderer == "xrender"})
 		if err != nil {
 			log.Fatal(err)
+		}
+		rec.backend = func() string {
+			if window.GPUActive() {
+				return renderer
+			}
+			return "cpu"
 		}
 		if name != "counter" {
 			frame := 0
 			rec.schedule = func(delay time.Duration) {
 				time.AfterFunc(delay, func() {
 					window.Update(func() {
+						rec.updateStart = time.Now()
 						frame++
 						rec.armed = true
 						if advance == nil {

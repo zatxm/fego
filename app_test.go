@@ -338,3 +338,55 @@ func TestGPURegionLossQueuesFullPaint(t *testing.T) {
 		t.Fatal("incomplete fallback repaint", view)
 	}
 }
+
+// deferredGPUWindow starts hardware presentation only when awaited or started.
+type deferredGPUWindow struct {
+	testWindow
+	requested, active bool
+	starts            int
+}
+
+func (w *deferredGPUWindow) GPUActive() bool { return w.active }
+func (w *deferredGPUWindow) SetGPUEnabled(on bool) bool {
+	w.requested = on
+	if !on && w.active {
+		w.active = false
+		return true
+	}
+	return false
+}
+func (w *deferredGPUWindow) StartGPU() { w.starts++ }
+func (w *deferredGPUWindow) AwaitGPU() bool {
+	if !w.requested || w.active {
+		return false
+	}
+	w.active = true
+	return true
+}
+
+func TestDeferredGPUStartKeepsSynchronousAPI(t *testing.T) {
+	native := &deferredGPUWindow{}
+	view := &resetView{}
+	w := &Window{app: NewApp(), native: native, view: view, width: 160, height: 100}
+	native.SetGPUEnabled(true) // as NewWindow does
+	w.presented()
+	if native.starts != 0 || native.active {
+		t.Fatal("the GPU started before the first frame finished")
+	}
+	w.app.dispatch()
+	if native.starts != 1 {
+		t.Fatal("first frame did not start the GPU", native.starts)
+	}
+	if !w.GPUActive() || view.resets != 1 || view.paints != 0 {
+		t.Fatal("GPUActive did not wait for the start or repainted re-entrantly", view)
+	}
+	w.app.dispatch()
+	if view.paints != 1 {
+		t.Fatal("activation was not repainted", view)
+	}
+	native.active, native.requested = false, false
+	w.SetGPUEnabled(true)
+	if !native.active || view.resets != 2 || view.paints != 2 {
+		t.Fatal("SetGPUEnabled returned before the hardware path was active", view)
+	}
+}

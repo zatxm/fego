@@ -10,6 +10,7 @@ fego 使用 CPU 绘制。这里分别测量控件更新、原生窗口提交和�
 | --- | --- |
 | counter | 静止的数字和按钮，另测空闲区间 |
 | list | 十万行虚拟列表，每帧滚动 8 px |
+| list-selection | fego 十万行列表，每帧用方向键在两个可见行之间切换选中项 |
 | grid | 600 个标签，每帧改变值和背景 |
 | form | 输入、数字、勾选、滑块和进度更新 |
 | image | RGBA 图片放大到窗口并重新提交 |
@@ -23,6 +24,7 @@ fego 使用 CPU 绘制。这里分别测量控件更新、原生窗口提交和�
 - `goHeapResidentMiB`：内核提供 `Go: heap` 映射名称时的驻留页，不是活对象大小。
 - 显示服务保留自己的缓存，其全部内存和前后变化都不能归于某一个应用。RSS 相加会重复计算共享页；PSS 与 GPU 区域不能拼成去重物理内存。
 - `fps`、`frameP50Ms`、`frameP99Ms` 是工具包呈现间隔，未测物理显示完成或输入到显示器的延迟。
+- fego 的 `updateP50Us` 和 `updateP99Us` 从 UI 线程开始处理场景更新计时，到本次原生提交返回为止。窗口系统接收输入前的排队和显示器扫描输出在计时范围之外。
 - 空闲 CPU 为 0 只说明低于采样分辨率。
 
 正式对照中旧/新版使用相同夹具、帧数、构建参数和环境，轮换顺序，不强制 GC，也不设置 `GOGC` / `GOMEMLIMIT`。本次使用专用 Xvfb 软件显示服务和独立 D-Bus/真实 AT-SPI registry，无障碍查询树保持活动；与历史 Weston/XWayland 或其他主机数据不跨环境拼接。
@@ -57,6 +59,14 @@ CGO_ENABLED=0 go test ./benchmarks/fego -run '^$' -bench BenchmarkComponents -be
 `ns/op` 是隔离操作的耗时，`B/op` 是累计分配；两者不代表进程 CPU 或 RSS/PSS。关闭字体缓存的诊断在强制 GC 后测量仍被持有的已关闭对象，单独标注，不能当作活动窗口驻留内存的收益。
 
 诊断版本用 `go build -tags benchprofile ./benchmarks/fego` 构建；设置 `BENCH_CPU_PROFILE` 可保存 CPU profile，`BENCH_HEAP_PROFILE` 会在结束时强制 GC 并保存堆 profile。它们只用于定位问题，不用于正式性能表。
+
+### Linux 原生呈现与托盘
+
+在支持 DRI3 的 XWayland 上，设置 `FEGO_RENDERER=gpu` 可测量 OpenGL，设置 `FEGO_RENDERER=xrender` 可测量 XRender。默认测 CPU 呈现。对照时给两个构建使用相同的基准程序和环境，检查每个样本的 `renderer.backend`。`startupMs` 从进程启动计到首帧，GPU 模式允许首帧先由 CPU 绘制。
+
+`go test ./internal/platform -run '^$' -bench '^BenchmarkTrayGetTitle$' -benchmem` 可单独测量托盘标题读取的耗时和分配。此项仅计入属性处理函数，进程间传输耗时可通过 D-Bus 客户端另测。
+
+2026-11-24 在 Linux amd64、Go 1.27.4 和 Radeon 780M 上对照接续优化前的工作区。五组采样中，读取托盘标题的每次分配从 2040 B 降至 16 B。800×600 窗口向上滚动 8 像素时，单次 OpenGL 复制从 1361 B、63 次分配降至 162 B、8 次分配，耗时中位数从 8.48 µs 降至 4.80 µs。复制计时截至驱动调用返回，整帧间隔另由原生窗口基准记录。
 
 ## 可选 FLTK 对照
 

@@ -4,6 +4,7 @@ package platform
 
 import (
 	"context"
+	_ "embed"
 	"image"
 	"reflect"
 	"sync"
@@ -11,7 +12,6 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/godbus/dbus/v5/introspect"
 )
 
 const (
@@ -23,6 +23,19 @@ const (
 	watcher                     = "org.kde.StatusNotifierWatcher"
 	watcherPath dbus.ObjectPath = "/StatusNotifierWatcher"
 )
+
+// The tray interfaces are fixed. Serving their descriptions directly avoids
+// deriving and marshaling the same XML for every tray.
+//
+//go:embed tray_item.xml
+var itemSchema string
+
+//go:embed tray_menu.xml
+var menuSchema string
+
+type traySchema string
+
+func (s traySchema) Introspect() (string, *dbus.Error) { return string(s), nil }
 
 type linuxPixmap struct {
 	Width, Height int32
@@ -82,28 +95,10 @@ func newLinuxTray(s TrayState, click func(int32)) (*linuxTray, error) {
 	}{
 		{sniPath, sniIface, item}, {menuPath, menuIface, menu},
 		{sniPath, propsIface, &linuxProps{t, sniIface}}, {menuPath, propsIface, &linuxProps{t, menuIface}},
+		{sniPath, "org.freedesktop.DBus.Introspectable", traySchema(itemSchema)},
+		{menuPath, "org.freedesktop.DBus.Introspectable", traySchema(menuSchema)},
 	} {
 		if err := conn.Export(entry.obj, entry.path, entry.name); err != nil {
-			return nil, err
-		}
-	}
-	for _, entry := range []struct {
-		path dbus.ObjectPath
-		name string
-		obj  any
-	}{
-		{sniPath, sniIface, item}, {menuPath, menuIface, menu},
-	} {
-		props := &linuxProps{t, entry.name}
-		values, _ := props.GetAll(entry.name)
-		schema := introspect.Interface{Name: entry.name, Methods: introspect.Methods(entry.obj)}
-		for name, value := range values {
-			schema.Properties = append(schema.Properties, introspect.Property{Name: name, Type: value.Signature().String(), Access: "read"})
-		}
-		node := &introspect.Node{Name: string(entry.path), Interfaces: []introspect.Interface{
-			schema, {Name: propsIface, Methods: introspect.Methods(props)},
-		}}
-		if err := conn.Export(introspect.NewIntrospectable(node), entry.path, "org.freedesktop.DBus.Introspectable"); err != nil {
 			return nil, err
 		}
 	}
@@ -200,19 +195,65 @@ type linuxProps struct {
 	iface string
 }
 
+var itemPropertyNames = [...]string{"Category", "Id", "Title", "Status", "WindowId", "IconPixmap", "IconName", "Menu", "ItemIsMenu", "ToolTip"}
+var menuPropertyNames = [...]string{"Version", "TextDirection", "Status", "IconThemePath"}
+
 func (p *linuxProps) GetAll(iface string) (map[string]dbus.Variant, *dbus.Error) {
 	if iface != p.iface {
 		return nil, dbus.NewError("org.freedesktop.DBus.Error.UnknownInterface", []any{iface})
 	}
+	names := itemPropertyNames[:]
 	if iface == menuIface {
-		return variants(map[string]any{"Version": uint32(3), "TextDirection": "ltr", "Status": "normal", "IconThemePath": []string{}}), nil
+		names = menuPropertyNames[:]
 	}
 	p.t.mu.RLock()
 	defer p.t.mu.RUnlock()
-	s := p.t.state
-	return variants(map[string]any{"Category": "ApplicationStatus", "Id": s.ID, "Title": s.Title, "Status": "Active",
-		"WindowId": uint32(0), "IconPixmap": p.t.pixmap, "IconName": "",
-		"Menu": menuPath, "ItemIsMenu": !s.HasActivation && len(s.Menu) > 0, "ToolTip": linuxToolTip{"", nil, s.ToolTip, ""}}), nil
+	out := make(map[string]dbus.Variant, len(names))
+	for _, name := range names {
+		out[name] = dbus.MakeVariant(p.value(name))
+	}
+	return out, nil
+}
+
+// value reads one property under the caller's read lock.
+func (p *linuxProps) value(name string) any {
+	if p.iface == menuIface {
+		switch name {
+		case "Version":
+			return uint32(3)
+		case "TextDirection":
+			return "ltr"
+		case "Status":
+			return "normal"
+		case "IconThemePath":
+			return []string{}
+		}
+		return nil
+	}
+	s := &p.t.state
+	switch name {
+	case "Category":
+		return "ApplicationStatus"
+	case "Id":
+		return s.ID
+	case "Title":
+		return s.Title
+	case "Status":
+		return "Active"
+	case "WindowId":
+		return uint32(0)
+	case "IconPixmap":
+		return p.t.pixmap
+	case "IconName":
+		return ""
+	case "Menu":
+		return menuPath
+	case "ItemIsMenu":
+		return !s.HasActivation && len(s.Menu) > 0
+	case "ToolTip":
+		return linuxToolTip{"", nil, s.ToolTip, ""}
+	}
+	return nil
 }
 
 func variants(values map[string]any) map[string]dbus.Variant {
@@ -224,12 +265,14 @@ func variants(values map[string]any) map[string]dbus.Variant {
 }
 
 func (p *linuxProps) Get(iface, name string) (dbus.Variant, *dbus.Error) {
-	props, err := p.GetAll(iface)
-	if err != nil {
-		return dbus.Variant{}, err
+	if iface != p.iface {
+		return dbus.Variant{}, dbus.NewError("org.freedesktop.DBus.Error.UnknownInterface", []any{iface})
 	}
-	if value, ok := props[name]; ok {
-		return value, nil
+	p.t.mu.RLock()
+	value := p.value(name)
+	p.t.mu.RUnlock()
+	if value != nil {
+		return dbus.MakeVariant(value), nil
 	}
 	return dbus.Variant{}, dbus.NewError("org.freedesktop.DBus.Error.UnknownProperty", []any{name})
 }

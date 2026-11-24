@@ -206,6 +206,165 @@ func TestTableScrollClearsCopiedHover(t *testing.T) {
 	}
 }
 
+func TestListScrollCopiesEdgesOnlyOnFlatSurface(t *testing.T) {
+	for _, theme := range []Theme{Light, Dark} {
+		for _, style := range []string{"root", "square", "rounded"} {
+			t.Run(fmt.Sprint(style, theme.Background), func(t *testing.T) {
+				rows := List(100, func(i int) string { return fmt.Sprint(i) }).Fill().SetSelected(0)
+				root := rows
+				if style != "root" {
+					root = Column(rows).Padding(9).Background(RGB(42, 50, 80))
+					if style == "square" {
+						rows.Radius(0)
+					}
+				}
+				h := newScrollScreen(View(root).Theme(theme), 1.25, true)
+				defer h.Close()
+				h.Document.live.scrollRows(rows, 8)
+				scroll := h.Document.live.scrolling
+				flat := style == "square" || (style == "root" && theme.Background == theme.Surface)
+				if scroll == nil || scroll.copyThumb != flat {
+					t.Fatalf("unexpected copy strategy for %s", style)
+				}
+				h.Step()
+				checkScrollPixels(t, h)
+				h.Document.live.scrollRows(rows, 0)
+				h.Step()
+				checkScrollPixels(t, h)
+			})
+		}
+	}
+}
+
+func TestRowSelectionDamageAndScroll(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 2} {
+		for _, kind := range []string{"list", "table", "tree"} {
+			t.Run(fmt.Sprint(kind, scale), func(t *testing.T) {
+				var rows *Element
+				switch kind {
+				case "list":
+					rows = List(100, func(i int) string { return fmt.Sprint(i) })
+				case "table":
+					data := make([][]string, 100)
+					for i := range data {
+						data[i] = []string{fmt.Sprint(i)}
+					}
+					rows = Table([]ColumnDef{{Title: "Row"}}, data)
+				case "tree":
+					nodes := make([]*TreeNode, 100)
+					for i := range nodes {
+						nodes[i] = &TreeNode{Label: fmt.Sprint(i)}
+					}
+					nodes[0].Children = []*TreeNode{{Label: "child"}}
+					rows = Tree(nodes...)
+				}
+				h := newScrollScreen(View(rows.Fill()), scale, true)
+				defer h.Close()
+				header, height := rows.headerHeight(), rows.rowHeight()
+				h.Click(50, header+height/2)
+				checkScrollPixels(t, h) // Includes expanding the first tree row.
+				before := h.uploaded
+				h.Click(50, header+height*1.5)
+				if delta := h.uploaded - before; delta <= 0 || delta > h.Width*int(2*height*scale+2) {
+					t.Fatalf("click uploaded %d pixels", delta)
+				}
+				checkScrollPixels(t, h)
+				h.Key("ArrowDown", false, false) // Changes focus appearance.
+				before = h.uploaded
+				h.Key("ArrowDown", false, false)
+				if delta := h.uploaded - before; delta <= 0 || delta > h.Width*int(2*height*scale+2) {
+					t.Fatalf("key uploaded %d pixels", delta)
+				}
+				checkScrollPixels(t, h)
+
+				v := h.Document.live
+				// Queue two offsets and two selections before a single paint.
+				copies := h.copies
+				v.scrollRows(rows, 8)
+				rows.SetSelected(4)
+				v.scrollRows(rows, 16)
+				rows.SetSelected(2)
+				h.Step()
+				if h.copies != copies+1 {
+					t.Fatal("queued changes lost the scroll copy")
+				}
+				checkScrollPixels(t, h)
+
+				lastVisible := int((rows.scroll+rows.rect.H-header)/height) - 1
+				rows.SetSelected(lastVisible)
+				h.Step()
+				copies = h.copies
+				h.Key("ArrowDown", false, false)
+				if rows.Selected() != lastVisible+1 || rows.scroll <= 16 {
+					t.Fatal("key did not reveal selection")
+				}
+				// A fractional physical displacement can only use a full repaint.
+				if scale == 1 && copies == h.copies {
+					t.Fatal("revealing an adjacent row did not copy pixels")
+				}
+				checkScrollPixels(t, h)
+				for _, key := range []string{"End", "Home"} {
+					h.Key(key, false, false)
+					checkScrollPixels(t, h)
+				}
+			})
+		}
+	}
+}
+
+func TestAccessibleSelectionAfterTableSort(t *testing.T) {
+	data := make([][]string, 100)
+	for i := range data {
+		data[i] = []string{fmt.Sprintf("%02d", 99-i)}
+	}
+	called := -1
+	rows := Table([]ColumnDef{{Title: "Row"}}, data).Fill().OnSelect(func(i int) { called = i })
+	h := newScrollScreen(View(rows), 1, true)
+	defer h.Close()
+	h.Click(50, 20)
+	for _, row := range []int{35, 36, 36, 0} {
+		h.Send(fego.Event{Kind: fego.AccessAction, AccessID: rows.id, Action: "select", Text: fmt.Sprint(row)})
+		if rows.Selected() != row || called != 99-row || rows.scroll != float32(row)*rows.rowHeight() {
+			t.Fatalf("selected %d, callback %d, scroll %v for row %d", rows.Selected(), called, rows.scroll, row)
+		}
+		checkScrollPixels(t, h)
+	}
+}
+
+func TestSelectionBandFitsSustainedInteraction(t *testing.T) {
+	rows := List(1000, func(int) string { return "row" }).Fill()
+	h := &regionScreen{scrollScreen: &scrollScreen{Tester: &Tester{Document: View(rows), Width: 800, Height: 600, Scale: 1}, supported: true}}
+	v := h.Document.Mount(h).(*view)
+	defer h.Close()
+	v.frame(false)
+	h.Key("Tab", false, false)
+	h.Key("ArrowDown", false, false)
+	for range 4 {
+		h.Key("ArrowDown", false, false)
+	}
+	if n := h.bandCapacity; n < 800*72*4 || n > 800*72*4+4095 {
+		t.Fatalf("two visible selected rows retained %d bytes", n)
+	}
+	checkRegionPixels(t, h)
+}
+
+func TestOffscreenSelectionUpdatesAccessibilityWithoutPaint(t *testing.T) {
+	rows := List(100, func(i int) string { return fmt.Sprint(i) }).Fill().SetSelected(90)
+	h := newScrollScreen(View(rows), 1, true)
+	defer h.Close()
+	h.Height = 360 // The next accessibility row starts exactly at the bottom edge.
+	h.Send(fego.Event{Kind: fego.Resize})
+	before := h.uploaded
+	rows.SetSelected(10)
+	h.Step()
+	for _, n := range h.nodes {
+		if n.ID == rows.id+11 && n.Selected && n.Bounds.Empty() && before == h.uploaded {
+			return
+		}
+	}
+	t.Fatal("offscreen selection should update its accessibility node without uploading pixels")
+}
+
 func TestTableSortingKeepsEqualRowsStable(t *testing.T) {
 	table := Table([]ColumnDef{{Title: "Label"}}, [][]string{{"c"}, {"a"}, {"a"}, {}})
 	h := NewTester(table, 300, 240)
@@ -556,11 +715,13 @@ func TestCleanScrollViewReusesFrameStorage(t *testing.T) {
 
 type regionScreen struct {
 	*scrollScreen
-	regions int
+	bandCapacity int
+	regions      int
 }
 
 func (h *regionScreen) RetainsPixels() bool { return true }
 func (h *regionScreen) PresentRegion(img *image.RGBA) {
+	h.bandCapacity = cap(img.Pix)
 	if h.screen == nil || h.screen.Rect != image.Rect(0, 0, h.Width, h.Height) {
 		h.screen = image.NewRGBA(image.Rect(0, 0, h.Width, h.Height))
 	}

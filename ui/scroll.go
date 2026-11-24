@@ -6,12 +6,12 @@ import (
 )
 
 type pixelScroll struct {
-	element    *Element
-	rect, full image.Rectangle
-	dy         int
-	eraseRow   int
-	start      float32
-	copyThumb  bool
+	element            *Element
+	rect, full         image.Rectangle
+	dy                 int
+	eraseRow, selected int
+	start              float32
+	copyThumb          bool
 }
 
 func (v *view) scrollRows(e *Element, next float32) {
@@ -31,10 +31,10 @@ func (v *view) scrollRows(e *Element, next float32) {
 	coalescing := previous != nil && previous.element == e
 	clean := !v.needsLayout && (len(v.dirty) == 0 || coalescing) && !v.size.Empty()
 	eraseRow := -1
-	start := old
+	start, selected := old, e.selected
 	if coalescing {
 		eraseRow = previous.eraseRow
-		start = previous.start
+		start, selected = previous.start, previous.selected
 	}
 	if e == v.hover && v.hoveredRow >= 0 {
 		if v.hoveredRow != e.selected {
@@ -78,8 +78,9 @@ func (v *view) scrollRows(e *Element, next float32) {
 	if e.rowCount() > 0 {
 		// Keep rounded corners in narrow side bands instead of repainting
 		// full-width margins above and below the copied rows.
-		flat := e.kind == kTable && e == v.root && v.theme.Background == v.theme.Surface &&
-			!e.style.bgSet && !e.style.borderSet && !(v.focusVisible && v.focused == e)
+		flat := e.style.radius == 0 || (e == v.root && v.theme.Background == v.theme.Surface &&
+			e.style.tone == standardTone && !e.style.card && !e.style.bgSet && !e.style.borderSet &&
+			!(v.focusVisible && v.focused == e))
 		if !flat {
 			r.Min.X += margin
 			r.Max.X = min(r.Max.X, int(math.Floor(float64((e.rect.X+e.rect.W)*v.scale)))-margin)
@@ -123,7 +124,7 @@ func (v *view) scrollRows(e *Element, next float32) {
 		// sized for the exposed body strips instead of the entire header.
 		full.Min.Y = max(full.Min.Y, int(math.Floor(float64((e.rect.Y+header)*v.scale))))
 	}
-	v.scrollState = pixelScroll{element: e, rect: r, full: full, dy: int(delta), eraseRow: eraseRow, start: start, copyThumb: copyThumb}
+	v.scrollState = pixelScroll{element: e, rect: r, full: full, dy: int(delta), eraseRow: eraseRow, selected: selected, start: start, copyThumb: copyThumb}
 	v.scrolling = &v.scrollState
 }
 

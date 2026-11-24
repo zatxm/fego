@@ -91,7 +91,7 @@ func main() {
 	}
 	scenes := strings.Split(*scenesFlag, ",")
 	for _, scene := range scenes {
-		if !slices.Contains([]string{"counter", "list", "grid", "table", "tree", "form", "editor", "linechart", "linechart-sparse", "barchart", "calendar", "image", "navigation", "richtext"}, scene) {
+		if !slices.Contains([]string{"counter", "list", "list-selection", "grid", "table", "tree", "form", "editor", "linechart", "linechart-sparse", "barchart", "calendar", "image", "navigation", "richtext"}, scene) {
 			log.Fatalf("unknown scene %q", scene)
 		}
 	}
@@ -255,20 +255,11 @@ func (p *process) wait(prefix string) (line, error) {
 			if !ok {
 				return line{}, fmt.Errorf("app exited before %q", prefix)
 			}
-			if strings.HasPrefix(l.text, "renderer ") {
-				var info map[string]string
-				if err := json.Unmarshal([]byte(strings.TrimPrefix(l.text, "renderer ")), &info); err != nil {
-					return line{}, fmt.Errorf("renderer marker: %w", err)
-				}
-				p.renderer = info
-				continue
-			}
 			if l.text == prefix || strings.HasPrefix(l.text, prefix+" ") {
 				return l, nil
 			}
-			kind, _, _ := strings.Cut(l.text, " ")
-			if kind == "ready" || kind == "start" || kind == "done" {
-				p.pending[kind] = l
+			if err := p.remember(l); err != nil {
+				return line{}, err
 			}
 		case <-guard.C:
 			return line{}, fmt.Errorf("app did not report %q", prefix)
@@ -276,12 +267,39 @@ func (p *process) wait(prefix string) (line, error) {
 	}
 }
 
+func (p *process) remember(l line) error {
+	kind, payload, _ := strings.Cut(l.text, " ")
+	switch kind {
+	case "renderer":
+		var info map[string]string
+		if err := json.Unmarshal([]byte(payload), &info); err != nil {
+			return fmt.Errorf("renderer marker: %w", err)
+		}
+		p.renderer = info
+	case "ready", "start", "done":
+		p.pending[kind] = l
+	}
+	return nil
+}
+
+// An idle window can report its renderer after ready without another frame marker.
+func (p *process) finalRenderer() (map[string]string, error) {
+	for range len(p.lines) {
+		if err := p.remember(<-p.lines); err != nil {
+			return nil, err
+		}
+	}
+	return p.renderer, nil
+}
+
 type frameResult struct {
-	Frames int     `json:"frames"`
-	WallUS float64 `json:"wallUs"`
-	P50US  float64 `json:"p50Us"`
-	P99US  float64 `json:"p99Us"`
-	MaxUS  float64 `json:"maxUs"`
+	Frames      int     `json:"frames"`
+	WallUS      float64 `json:"wallUs"`
+	P50US       float64 `json:"p50Us"`
+	P99US       float64 `json:"p99Us"`
+	MaxUS       float64 `json:"maxUs"`
+	UpdateP50US float64 `json:"updateP50Us"`
+	UpdateP99US float64 `json:"updateP99Us"`
 }
 
 func decodeFrame(text string, frames int) (frameResult, error) {
@@ -289,7 +307,7 @@ func decodeFrame(text string, frames int) (frameResult, error) {
 	if err := json.Unmarshal([]byte(strings.TrimPrefix(text, "done ")), &f); err != nil {
 		return f, err
 	}
-	if f.Frames != frames || f.WallUS <= 0 || f.P50US <= 0 || f.P99US < f.P50US || f.MaxUS < f.P99US {
+	if f.Frames != frames || f.WallUS <= 0 || f.P50US <= 0 || f.P99US < f.P50US || f.MaxUS < f.P99US || f.UpdateP50US < 0 || f.UpdateP99US < f.UpdateP50US {
 		return f, errors.New("invalid frame count or timing in done marker")
 	}
 	return f, nil
@@ -349,6 +367,9 @@ func measure(path, scene string, warmup, frames int, idle time.Duration, server 
 		}
 		m["fps"] = float64(frames) * 1e6 / f.WallUS
 		m["frameP50Ms"], m["frameP99Ms"], m["frameMaxMs"] = f.P50US/1000, f.P99US/1000, f.MaxUS/1000
+		if f.UpdateP99US > 0 {
+			m["updateP50Us"], m["updateP99Us"] = f.UpdateP50US, f.UpdateP99US
+		}
 		// Let the last asynchronous display submission reach the dedicated compositor.
 		time.Sleep(50 * time.Millisecond)
 	}
@@ -369,7 +390,10 @@ func measure(path, scene string, warmup, frames int, idle time.Duration, server 
 	if err != nil {
 		return record, err
 	}
-	record.Renderer = p.renderer
+	record.Renderer, err = p.finalRenderer()
+	if err != nil {
+		return record, err
+	}
 	heap, found, err := goHeapResident(p.cmd.Process.Pid)
 	if err != nil {
 		return record, err

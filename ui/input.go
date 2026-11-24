@@ -2,6 +2,7 @@ package ui
 
 import (
 	"image"
+	"math"
 	"slices"
 	"strings"
 	"unicode"
@@ -233,13 +234,17 @@ func (v *view) input(ev fego.Event) {
 				}
 				v.slide(e, x)
 			}
-			v.invalidate(e, false)
+			if e.rowCount() == 0 {
+				v.invalidate(e, false)
+			}
 		}
 	case fego.PointerCancel:
 		v.scrollDrag = nil
 		if e := v.pressed; e != nil {
 			v.pressed = nil
-			v.repaint(e, false)
+			if e.rowCount() == 0 {
+				v.repaint(e, false)
+			}
 		}
 	case fego.PointerUp:
 		if ev.Button != 1 {
@@ -252,7 +257,9 @@ func (v *view) input(ev fego.Event) {
 		e := v.pressed
 		v.pressed = nil
 		if e != nil {
-			v.repaint(e, false)
+			if e.rowCount() == 0 {
+				v.repaint(e, false)
+			}
 			if e.kind == kVirtualRow && e.parent != nil {
 				l := e.parent.virtual
 				if l.options.Reorder != nil && l.clip.contains(x, y) &&
@@ -401,15 +408,22 @@ func (v *view) updateHoveredRow(e *Element, next int) {
 	if next == v.hoveredRow {
 		return
 	}
-	for _, i := range [...]int{v.hoveredRow, next} {
-		if i >= 0 {
-			y := e.rect.Y + e.headerHeight() + float32(i)*e.rowHeight() - e.scroll
-			v.damage(Rect{e.rect.X, y, e.rect.W, e.rowHeight()}.intersect(e.clip).pixels(v.scale))
-		}
-	}
+	v.damage(e.rowPixels(v.hoveredRow, v.scale))
+	v.damage(e.rowPixels(next, v.scale))
 	v.hoveredRow = next
 	v.scrolling = nil
 	v.host.Invalidate()
+}
+
+func (e *Element) rowPixels(row int, scale float32) image.Rectangle {
+	if row < 0 || row >= e.rowCount() {
+		return image.Rectangle{}
+	}
+	y0 := e.rect.Y + e.headerHeight()
+	y := y0 + float32(row)*e.rowHeight() - e.scroll
+	r := (Rect{e.rect.X, y, e.rect.W, e.rowHeight()}).pixels(scale).Intersect(e.clip.pixels(scale))
+	r.Min.Y = max(r.Min.Y, int(math.Floor(float64(y0*scale))))
+	return r
 }
 
 func scrollbar(e *Element) (track, thumb Rect) {
@@ -578,6 +592,7 @@ func (v *view) activate(e *Element, x, y float32) {
 				e.own().expanded[n] = !e.expanded[n]
 				e.rebuildTree()
 				e.scroll = min(e.scroll, e.maxScroll())
+				e.touch(false)
 			}
 		}
 		if e.onSelect != nil {
@@ -665,8 +680,8 @@ func (v *view) navigate(e *Element, key string) {
 			return
 		}
 		i = max(0, min(n-1, i))
-		e.SetSelected(i)
 		e.revealRow(i)
+		e.SetSelected(i)
 		if e.onSelect != nil {
 			index := i
 			if e.kind == kTable && len(e.order) > 0 {
@@ -680,12 +695,18 @@ func (e *Element) revealRow(i int) {
 	top := float32(i) * e.rowHeight()
 	bottom := top + e.rowHeight()
 	height := e.rect.H - e.headerHeight()
-	if top < e.scroll {
-		e.scroll = top
-	} else if bottom > e.scroll+height {
-		e.scroll = bottom - height
+	next := e.scroll
+	if top < next {
+		next = top
+	} else if bottom > next+height {
+		next = bottom - height
 	}
-	e.scroll = max(0, min(e.scroll, e.maxScroll()))
+	next = max(0, min(next, e.maxScroll()))
+	if e.view != nil {
+		e.view.scrollRows(e, next)
+	} else {
+		e.scroll = next
+	}
 }
 
 func (v *view) slide(e *Element, x float32) {

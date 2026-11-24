@@ -6,7 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"runtime"
+	"strings"
 	"sync"
+	"unsafe"
 
 	"github.com/ebitengine/purego"
 )
@@ -29,10 +32,12 @@ var egl struct {
 	destroySurface func(uintptr, uintptr) uint32
 	getError       func() uint32
 	getProc        func(string) uintptr
+	queryString    func(uintptr, int32) *byte
 }
 
 var gpuX11Query func(uintptr, string, *int32, *int32, *int32) int32
 var gpuX11Visual func(uintptr) uintptr
+var gpuX11Sync func(uintptr, int32) int32
 
 func loadEGL() error {
 	egl.once.Do(func() {
@@ -43,6 +48,7 @@ func loadEGL() error {
 		}
 		purego.RegisterLibFunc(&gpuX11Query, x11, "XQueryExtension")
 		purego.RegisterLibFunc(&gpuX11Visual, x11, "XVisualIDFromVisual")
+		purego.RegisterLibFunc(&gpuX11Sync, x11, "XSync")
 		lib, err := purego.Dlopen("libEGL.so.1", purego.RTLD_NOW|purego.RTLD_LOCAL)
 		if err != nil {
 			egl.err = err
@@ -57,6 +63,7 @@ func loadEGL() error {
 			{"eglCreateContext", &egl.createContext}, {"eglCreateWindowSurface", &egl.createSurface}, {"eglMakeCurrent", &egl.makeCurrent},
 			{"eglSwapBuffers", &egl.swapBuffers}, {"eglSwapInterval", &egl.swapInterval}, {"eglDestroyContext", &egl.destroyContext},
 			{"eglDestroySurface", &egl.destroySurface}, {"eglGetError", &egl.getError}, {"eglGetProcAddress", &egl.getProc},
+			{"eglQueryString", &egl.queryString},
 		} {
 			address, err := purego.Dlsym(lib, symbol.name)
 			if err != nil {
@@ -72,6 +79,8 @@ func loadEGL() error {
 type eglContext struct {
 	b                         *xBackend
 	display, surface, context uintptr
+	swapDamage                uintptr
+	args                      [4]uintptr
 }
 
 func (w *xWindow) SetGPUEnabled(enabled bool) bool {
@@ -89,21 +98,159 @@ func (w *xWindow) SetGPUEnabled(enabled bool) bool {
 		w.surfaceSize = image.Point{}
 		return true
 	}
+	b := w.b
+	if enabled && !w.graphics.requested {
+		w.gpuFailed = false
+		if b.eglDisplay == 0 {
+			// Loading the driver takes tens of milliseconds. StartGPU or AwaitGPU
+			// begins it; CPU frames continue until the event loop sees the result.
+			w.graphics.requested = true
+			return false
+		}
+	}
 	changed := w.graphics.set(enabled, w.newGPUContext)
 	if changed && w.graphics.renderer != nil {
 		w.releaseUploads()
 	}
-	if w.b.eglContexts == 0 && w.b.eglDisplay != 0 {
-		egl.terminate(w.b.eglDisplay)
-		w.b.eglDisplay = 0
-	}
+	b.releaseEGL()
 	w.surfaceSize = image.Point{}
 	return changed
+}
+
+func (w *xWindow) gpuWaiting() bool {
+	return !w.closed && !w.preferXRender && w.graphics.requested && w.graphics.renderer == nil && !w.gpuFailed
+}
+
+// StartGPU begins a requested EGL start in the background.
+func (w *xWindow) StartGPU() {
+	if w.gpuWaiting() && w.b.eglDisplay == 0 {
+		w.b.startEGL()
+	}
+}
+
+// AwaitGPU completes a requested start and reports whether w became active.
+// Other windows that became active receive a Paint event.
+func (w *xWindow) AwaitGPU() bool {
+	w.StartGPU()
+	if !w.b.eglPending {
+		return false
+	}
+	return w.b.finishEGL(<-w.b.eglDone, w)
+}
+
+type eglStart struct {
+	xdisplay, display uintptr
+	err               error
+}
+
+func (b *xBackend) startEGL() {
+	if b.eglPending {
+		return
+	}
+	if b.eglDone == nil {
+		b.eglDone = make(chan eglStart, 1)
+	}
+	b.eglPending = true
+	// Load what the CPU frames need first: dlopen and dlsym wait while the
+	// driver is being loaded on the other thread.
+	loadXShm()
+	xdisplay := b.eglXDisplay
+	go func() {
+		b.eglDone <- openEGL(xdisplay)
+		b.Wake()
+	}()
+}
+
+// openEGL initializes EGL on a private X connection, so it can run beside the
+// UI thread. Window surfaces still use the windows' server-side IDs.
+func openEGL(xdisplay uintptr) (r eglStart) {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	r.xdisplay = xdisplay
+	if r.err = loadEGL(); r.err != nil {
+		return r
+	}
+	if r.xdisplay == 0 {
+		if r.xdisplay = xl.openDisplay(""); r.xdisplay == 0 {
+			r.err = errors.New("open X11 display for EGL")
+			return r
+		}
+	}
+	var opcode, event, errorBase int32
+	if gpuX11Query(r.xdisplay, "DRI3", &opcode, &event, &errorBase) == 0 {
+		r.err = errors.New("X11 DRI3 unavailable")
+		return r
+	}
+	display := egl.getDisplay(0x31d5, r.xdisplay, nil)
+	var major, minor int32
+	if display == 0 || egl.initialize(display, &major, &minor) == 0 {
+		r.err = fmt.Errorf("initialize EGL: %#x", egl.getError())
+		return r
+	}
+	r.display = display
+	return r
+}
+
+// finishEGL runs on the UI thread and creates contexts for waiting windows.
+// It reports whether caller became active; caller repaints itself.
+func (b *xBackend) finishEGL(r eglStart, caller *xWindow) (activated bool) {
+	b.eglPending = false
+	b.eglXDisplay = r.xdisplay
+	if r.err == nil {
+		b.eglDisplay = r.display
+	}
+	for _, w := range b.windows {
+		if !w.gpuWaiting() {
+			continue
+		}
+		if r.err != nil || !w.graphics.open(w.newGPUContext) {
+			// Like a failed synchronous start, stay on the CPU until re-enabled.
+			w.gpuFailed = true
+			continue
+		}
+		w.releaseUploads()
+		w.surfaceSize = image.Point{}
+		if w == caller {
+			activated = true
+		} else {
+			w.emit(Event{Kind: Paint})
+		}
+	}
+	b.releaseEGL()
+	return activated
+}
+
+// releaseEGL terminates an initialized display once no context uses it.
+func (b *xBackend) releaseEGL() {
+	if b.eglContexts == 0 && b.eglDisplay != 0 {
+		egl.terminate(b.eglDisplay)
+		b.eglDisplay = 0
+	}
+}
+
+// closeEGL runs when the backend is released, after its windows closed.
+func (b *xBackend) closeEGL() {
+	if b.eglPending {
+		b.finishEGL(<-b.eglDone, nil)
+	}
+	if b.eglXDisplay != 0 {
+		xl.closeDisplay(b.eglXDisplay)
+		b.eglXDisplay = 0
+	}
 }
 func (w *xWindow) PresentGPURegions(size image.Point, paint func(func(*image.RGBA))) bool {
 	if w.render.dst != 0 {
 		paint(w.PresentRegion)
 		return true
+	}
+	if w.restoring {
+		frame := paint
+		paint = func(upload func(*image.RGBA)) {
+			frame(func(img *image.RGBA) {
+				upload(img)
+				w.restore(img.Rect)
+			})
+		}
 	}
 	return w.graphics.presentRegions(size, paint)
 }
@@ -120,20 +267,8 @@ func (w *xWindow) SetFragmentShader(source string) error {
 
 func (w *xWindow) newGPUContext() (glContext, error) {
 	b := w.b
-	if err := loadEGL(); err != nil {
-		return nil, err
-	}
-	var opcode, event, errorBase int32
-	if gpuX11Query(b.display, "DRI3", &opcode, &event, &errorBase) == 0 {
-		return nil, errors.New("X11 DRI3 unavailable")
-	}
 	if b.eglDisplay == 0 {
-		display := egl.getDisplay(0x31d5, b.display, nil)
-		var major, minor int32
-		if display == 0 || egl.initialize(display, &major, &minor) == 0 {
-			return nil, fmt.Errorf("initialize EGL: %#x", egl.getError())
-		}
-		b.eglDisplay = display
+		return nil, errors.New("EGL is not initialized")
 	}
 	display := b.eglDisplay
 	if egl.bindAPI(0x30a2) == 0 {
@@ -169,6 +304,13 @@ func (w *xWindow) newGPUContext() (glContext, error) {
 	}
 	b.eglContexts++
 	c := &eglContext{b: b, display: display, surface: surface, context: ctx}
+	extensions := " " + xString(egl.queryString(display, 0x3055)) + " "
+	for _, name := range [...]string{"KHR", "EXT"} {
+		if strings.Contains(extensions, " EGL_"+name+"_swap_buffers_with_damage ") {
+			c.swapDamage = egl.getProc("eglSwapBuffersWithDamage" + name)
+			break
+		}
+	}
 	if !c.MakeCurrent() {
 		c.Close()
 		return nil, errors.New("activate EGL window context")
@@ -180,19 +322,31 @@ func (w *xWindow) newGPUContext() (glContext, error) {
 func (c *eglContext) MakeCurrent() bool {
 	return c.context != 0 && egl.makeCurrent(c.display, c.surface, c.surface, c.context) != 0
 }
-func (c *eglContext) Swap() bool               { return c.surface != 0 && egl.swapBuffers(c.display, c.surface) != 0 }
+func (c *eglContext) Swap() bool { return c.surface != 0 && egl.swapBuffers(c.display, c.surface) != 0 }
+
+// SwapDamage swaps but tells the display server that only rects changed.
+// rects hold x, y, width, height with a bottom-left origin.
+func (c *eglContext) SwapDamage(rects []int32) bool {
+	if c.swapDamage == 0 || len(rects) == 0 {
+		return c.Swap()
+	}
+	c.args = [4]uintptr{c.display, c.surface, uintptr(unsafe.Pointer(&rects[0])), uintptr(len(rects) / 4)}
+	ok, _, _ := purego.SyscallN(c.swapDamage, c.args[:]...)
+	runtime.KeepAlive(rects)
+	return c.surface != 0 && uint32(ok) != 0
+}
 func (c *eglContext) Proc(name string) uintptr { return egl.getProc(name) }
 func (c *eglContext) Close() {
 	if c.context == 0 {
 		return
 	}
+	// Presents travel on the EGL connection, unordered with the window's own
+	// requests: let them land before CPU uploads replace this surface.
+	gpuX11Sync(c.b.eglXDisplay, 0)
 	egl.makeCurrent(c.display, 0, 0, 0)
 	egl.destroySurface(c.display, c.surface)
 	egl.destroyContext(c.display, c.context)
 	c.surface, c.context = 0, 0
 	c.b.eglContexts--
-	if c.b.eglContexts == 0 {
-		egl.terminate(c.display)
-		c.b.eglDisplay = 0
-	}
+	c.b.releaseEGL()
 }

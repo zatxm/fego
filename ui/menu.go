@@ -5,6 +5,7 @@ import "github.com/zatxm/fego/v26"
 const popupRowHeight = 30
 
 type popup struct {
+	anchor                   *Rect
 	owner                    *Element
 	menu                     []MenuEntry
 	current, selected, first int
@@ -55,9 +56,16 @@ func (v *view) openPopup(owner *Element, menu []MenuEntry) {
 
 func (v *view) placePopup(p *popup) {
 	bounds := Rect{W: float32(v.size.Dx()) / v.scale, H: float32(v.size.Dy()) / v.scale}
-	w := max(p.owner.rect.W, 128)
+	anchor := p.owner.rect
+	if p.anchor != nil {
+		anchor = *p.anchor
+	}
+	w := max(anchor.W, 128)
+	if p.anchor != nil {
+		w = 184
+	}
 	h := float32(min(p.count(), 10)*popupRowHeight + 8)
-	p.rect = popupBounds(p.owner.rect, bounds, w, h)
+	p.rect = popupBounds(anchor, bounds, w, h)
 	p.first = min(p.first, max(0, p.count()-p.rows()))
 }
 
@@ -233,4 +241,24 @@ func (v *view) paintPopup(p *Painter) {
 		p.clip = rowClip
 	}
 	p.clip = clip
+}
+
+// ContextMenu opens a menu at a logical window coordinate.
+func (d *Document) ContextMenu(owner *Element, x, y float32, items ...MenuItem) {
+	v := d.live
+	if v == nil || owner == nil || owner.view != v || len(items) == 0 {
+		return
+	}
+	v.openPopup(owner, menuEntries(items))
+	p := v.popup
+	v.damagePopup(p)
+	p.anchor = &Rect{X: x, Y: y}
+	v.placePopup(p)
+	v.damagePopup(p)
+}
+
+// OverlayOpen lets hosts route terminal input to a menu or modal while it is open.
+func (d *Document) OverlayOpen() bool {
+	v := d.live
+	return v != nil && (v.popup != nil || v.dialog != nil || v.popover.content != nil)
 }

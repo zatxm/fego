@@ -222,11 +222,11 @@ func (v *view) accessAction(ev fego.Event) {
 		if row < 0 || row >= n {
 			return
 		}
-		e.SetSelected(row)
 		v.focus(e)
 		if e.rowCount() > 0 {
-			e.scroll = max(0, min(e.maxScroll(), float32(row)*e.rowHeight()))
+			v.scrollRows(e, max(0, min(e.maxScroll(), float32(row)*e.rowHeight())))
 		}
+		e.SetSelected(row)
 		if e.onSelect != nil {
 			if e.kind == kTable && len(e.order) > 0 {
 				row = e.order[row]

@@ -605,8 +605,19 @@ func (e *Element) SetSelected(i int) *Element {
 		panic("ui: selection outside options")
 	}
 	if e.selected != i {
+		old := e.selected
 		e.own().selected = i
-		e.touch(false)
+		if v := e.view; v != nil && e.rowCount() > 0 {
+			v.accessDirty = true
+			if v.scrolling == nil || v.scrolling.element != e {
+				v.scrolling = nil
+				v.damage(e.rowPixels(old, v.scale))
+				v.damage(e.rowPixels(i, v.scale))
+				v.host.Invalidate()
+			}
+		} else {
+			e.touch(false)
+		}
 	}
 	return e
 }

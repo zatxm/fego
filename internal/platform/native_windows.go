@@ -423,6 +423,9 @@ func winModifiers(e Event) Event {
 	return e
 }
 func winKey(v uintptr) string {
+	if v >= 0x70 && v <= 0x87 {
+		return fmt.Sprintf("F%d", v-0x70+1)
+	}
 	switch v {
 	case 8:
 		return "Backspace"
@@ -648,5 +651,16 @@ func (b *windowsBackend) deliverActions() {
 	b.actionsMu.Unlock()
 	for _, fn := range actions {
 		fn()
+	}
+}
+
+var winIsZoomed = winUser.NewProc("IsZoomed")
+
+func (w *windowsWindow) Maximized() bool { r, _, _ := winIsZoomed.Call(w.hwnd); return r != 0 }
+func (w *windowsWindow) SetMaximized(on bool) {
+	if on {
+		winShow.Call(w.hwnd, 3)
+	} else {
+		winShow.Call(w.hwnd, 9)
 	}
 }

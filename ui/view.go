@@ -11,9 +11,10 @@ import (
 )
 
 type Document struct {
-	root  *Element
-	theme Theme
-	live  *view
+	onDialogDismiss func()
+	root            *Element
+	theme           Theme
+	live            *view
 }
 
 func View(root *Element) *Document {
@@ -79,12 +80,13 @@ type view struct {
 	root                    *Element
 	host                    fego.Host
 	theme                   Theme
-	text                    *fonttext.System
+	text, mono              *fonttext.System
 	img                     *image.RGBA // full surface, only for hosts without region
 	region                  regionHost
 	band                    image.RGBA
 	bandMem                 []byte
 	bandNeed                int
+	bandOversized           bool
 	bandMu                  sync.Mutex // the idle timer releases bandMem off the UI thread
 	bandTimer               *time.Timer
 	size                    image.Rectangle
@@ -150,9 +152,13 @@ func (v *view) Close() {
 	v.root.attach(nil)
 	if v.dialog != nil {
 		v.dialog.attach(nil)
+		v.doc.dialogDismissed()
 	}
 	v.doc.live = nil
 	v.text.Close()
+	if v.mono != nil {
+		v.mono.Close()
+	}
 }
 func (v *view) invalidate(e *Element, layout bool) {
 	v.accessDirty = true
@@ -256,6 +262,7 @@ func (v *view) frame(force bool) {
 		v.dirty = append(v.dirty[:0], v.size)
 	}
 	if len(v.dirty) == 0 {
+		v.flushAccessibility()
 		if force {
 			v.host.Present(v.img, []image.Rectangle{v.img.Rect})
 		}
@@ -312,6 +319,10 @@ func (v *view) frame(force bool) {
 	}
 	v.paints += uint64(len(v.dirty))
 	v.dirty = v.dirty[:0]
+	v.flushAccessibility()
+}
+
+func (v *view) flushAccessibility() {
 	if v.accessDirty {
 		v.accessDirty = false
 		v.updateCaret()
@@ -330,13 +341,16 @@ func (v *view) paintBands(upload func(*image.RGBA)) {
 		}
 	}
 	if cap(v.bandMem) > smallBandBytes {
-		if v.bandNeed <= smallBandBytes {
+		// Two smaller frames distinguish sustained interaction from a single partial repaint.
+		oversized := v.bandNeed <= cap(v.bandMem)/2
+		if v.bandNeed <= smallBandBytes || (oversized && v.bandOversized) {
 			v.releaseBand()
 		} else if v.bandTimer == nil {
 			v.bandTimer = time.AfterFunc(bandIdle, v.trimBand)
 		} else {
 			v.bandTimer.Reset(bandIdle)
 		}
+		v.bandOversized = oversized
 	}
 	v.bandNeed = 0
 	v.bandMu.Unlock()
@@ -344,13 +358,18 @@ func (v *view) paintBands(upload func(*image.RGBA)) {
 
 func (v *view) damageCopiedOverlays(scroll *pixelScroll, dst image.Rectangle) {
 	e := scroll.element
-	if scroll.eraseRow >= 0 {
-		// The old hover highlight moved with the copied pixels.
-		y := e.rect.Y + e.headerHeight() + float32(scroll.eraseRow)*e.rowHeight() - e.scroll
-		row := Rect{e.rect.X, y, e.rect.W, e.rowHeight()}.pixels(v.scale).Intersect(dst)
-		if !row.Empty() {
+	// Repaint highlights that moved with the copied pixels.
+	rowDamage := func(i int) {
+		if row := e.rowPixels(i, v.scale).Intersect(dst); !row.Empty() {
 			v.dirty = append(v.dirty, row)
 		}
+	}
+	if scroll.eraseRow >= 0 {
+		rowDamage(scroll.eraseRow)
+	}
+	if scroll.selected != e.selected {
+		rowDamage(scroll.selected)
+		rowDamage(e.selected)
 	}
 	if scroll.copyThumb {
 		old := e.rowScrollThumb(scroll.start).pixels(v.scale).Add(image.Pt(0, scroll.dy))
@@ -392,11 +411,12 @@ func (v *view) trimBand() {
 func (v *view) releaseBand() {
 	bandFree(v.bandMem)
 	v.bandMem, v.band = nil, image.RGBA{}
+	v.bandOversized = false
 }
 
 func (v *view) paintRegion(dst *image.RGBA, d image.Rectangle) {
 	scale := v.scale
-	p := &Painter{dst: dst, clip: d, scale: scale, text: v.text, theme: v.theme}
+	p := &Painter{dst: dst, clip: d, scale: scale, text: v.text, mono: &v.mono, theme: v.theme}
 	p.fillPixels(d, v.theme.Background)
 	v.paint(p, v.root, false)
 	p.fillPixels(d, RGBA(0, 0, 0, v.dialogShade))
@@ -433,6 +453,25 @@ const (
 
 func (d *Document) ShowDialog(content *Element) { d.showDialog(content, centerPanel) }
 
+// ShowDialogWithDismiss calls dismissed once when the dialog is closed or replaced.
+func (d *Document) ShowDialogWithDismiss(content *Element, dismissed func()) {
+	if d.live == nil {
+		if dismissed != nil {
+			dismissed()
+		}
+		return
+	}
+	d.showDialog(content, centerPanel)
+	d.onDialogDismiss = dismissed
+}
+func (d *Document) dialogDismissed() {
+	fn := d.onDialogDismiss
+	d.onDialogDismiss = nil
+	if fn != nil {
+		fn()
+	}
+}
+
 func (d *Document) showDialog(content *Element, placement panelPlacement) {
 	v := d.live
 	if v == nil {
@@ -450,6 +489,7 @@ func (d *Document) showDialog(content *Element, placement panelPlacement) {
 	} else {
 		v.forget(v.dialog)
 		v.dialog.attach(nil)
+		d.dialogDismissed()
 	}
 	v.dialog = content
 	v.dialogPlacement = placement
@@ -477,6 +517,7 @@ func (d *Document) CloseDialog() {
 	v.returnFocus = nil
 	v.invalidate(v.root, false)
 	v.fadeDialogShade(0)
+	d.dialogDismissed()
 }
 
 const dialogFadeDuration = 150 * time.Millisecond

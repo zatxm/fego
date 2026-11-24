@@ -405,8 +405,8 @@ func ComboBox(options []string, value string) *ComboBoxView {
 				next = c.Choices.Selected() - 1
 			}
 			next = max(0, min(c.Choices.count-1, next))
-			c.Choices.SetSelected(next)
 			c.Choices.revealRow(next)
+			c.Choices.SetSelected(next)
 		}
 	}
 	c.Input.OnSubmit(func() {
