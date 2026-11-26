@@ -554,7 +554,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 				if v.focused == e && i == min(e.cursor, e.otpLength-1) {
 					p.frame(slot, 4, t.Ring, fieldSurface(t, e))
 					if i == len(e.text) {
-						p.Rect(Rect{slot.X + slot.W/2, slot.Y + (slot.H-14)/2, 1, 14}, t.Text)
+						p.Rect(v.inputCaretRect(e, slot.X+slot.W/2, slot.Y), t.Text)
 					}
 				}
 				if i >= min(e.anchor, e.cursor) && i < max(e.anchor, e.cursor) {
@@ -581,17 +581,15 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			break
 		}
 		p.clip = p.clip.Intersect(inner.pixels(v.scale))
-		text := e.text
-		if e.password {
-			text = strings.Repeat("•", len([]rune(text)))
-		}
+		text, password := e.text, e.password
 		ink := fg
 		if text == "" {
 			text = e.placeholder
+			password = false
 			ink = t.Muted
 		}
 		v.paintSelection(p, e, inner, font)
-		lineH := v.text.LineHeight(font, false)
+		lineH := v.inputLineHeight(font)
 		i := 0
 		for line := range strings.SplitSeq(text, "\n") {
 			y := inner.Y + float32(i)*lineH - e.scroll
@@ -599,13 +597,13 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 				break
 			}
 			if y+lineH >= inner.Y {
-				p.Label(line, inner.X-e.scrollX, y, font, ink, false)
+				p.Label(inputDisplayLine(line, password), inner.X-e.scrollX, y, font, ink, false)
 			}
 			i++
 		}
 		if v.focused == e {
 			x, y := v.caretPosition(e, inner)
-			p.Rect(Rect{x, y, 1.4, font * 1.25}, t.Accent)
+			p.Rect(v.inputCaretRect(e, x, y), t.Accent)
 		}
 	case kCheck, kRadio, kSwitch:
 		cx, cy := r.X+8, r.Y+r.H/2
@@ -881,7 +879,7 @@ func (v *view) paintSelection(p *Painter, e *Element, inner Rect, font float32) 
 	}
 	start, end := min(e.cursor, e.anchor), max(e.cursor, e.anchor)
 	lineStart, row := 0, 0
-	lineH := v.text.LineHeight(font, false)
+	lineH := v.inputLineHeight(font)
 	for line := range strings.SplitSeq(e.text, "\n") {
 		y := inner.Y + float32(row)*lineH - e.scroll
 		if y*p.scale > float32(p.clip.Max.Y) || lineStart >= end {
@@ -890,15 +888,10 @@ func (v *view) paintSelection(p *Painter, e *Element, inner Rect, font float32) 
 		count := utf8.RuneCountInString(line)
 		a, b := max(start, lineStart), min(end, lineStart+count)
 		if a < b && (y+lineH)*p.scale >= float32(p.clip.Min.Y) {
-			before := line[:runeByteOffset(line, a-lineStart)]
-			selected := line[runeByteOffset(line, a-lineStart):runeByteOffset(line, b-lineStart)]
-			if e.password {
-				before = strings.Repeat("•", a-lineStart)
-				selected = strings.Repeat("•", b-a)
-			}
-			x, _ := v.text.Measure(before, font, false)
-			w, _ := v.text.Measure(selected, font, false)
-			p.Rect(Rect{inner.X + x - e.scrollX, y, w, lineH}, mix(v.theme.Surface, v.theme.Accent, .2))
+			before := inputDisplayLine(line[:runeByteOffset(line, a-lineStart)], e.password)
+			through := inputDisplayLine(line[:runeByteOffset(line, b-lineStart)], e.password)
+			x, endX := v.inputAdvance(before, font), v.inputAdvance(through, font)
+			p.Rect(Rect{inner.X + x - e.scrollX, y, endX - x, lineH}, mix(v.theme.Surface, v.theme.Accent, .2))
 		}
 		lineStart += count + 1
 		row++

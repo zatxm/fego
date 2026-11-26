@@ -366,7 +366,7 @@ func (e *Element) maxScroll() float32 {
 		}
 		lineH := font * 1.5
 		if e.view != nil {
-			lineH = e.view.text.LineHeight(font, false)
+			lineH = e.view.inputLineHeight(font)
 		}
 		lines := 1
 		if e.kind == kEditor {

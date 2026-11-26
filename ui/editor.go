@@ -365,7 +365,7 @@ func (e *Element) markEditorEdit() {
 func (v *view) revealEditorCaret(e *Element) {
 	inner := v.inputInner(e)
 	_, y := v.caretPosition(e, inner)
-	lineHeight := v.text.LineHeight(v.font(e), false)
+	lineHeight := v.inputLineHeight(v.font(e))
 	switch {
 	case y < inner.Y:
 		e.scroll = max(0, e.scroll+y-inner.Y)
@@ -377,7 +377,7 @@ func (v *view) revealEditorCaret(e *Element) {
 
 func (v *view) paintSource(p *Painter, e *Element, inner Rect, font float32, ink Color) {
 	s := e.sourceIndex()
-	lineH := v.text.LineHeight(font, false)
+	lineH := v.inputLineHeight(font)
 	allClip := p.clip
 	contentClip := allClip.Intersect(inner.pixels(v.scale))
 	gutterClip := allClip.Intersect(Rect{e.rect.X + 4, inner.Y, 40, inner.H}.pixels(v.scale))
@@ -430,10 +430,10 @@ func (v *view) paintSource(p *Painter, e *Element, inner Rect, font float32, ink
 			if lo > n || (caret && hi > n) {
 				return
 			}
-			left, _ := v.text.Measure(text[:runeByteOffset(text, max(0, lo))], font, false)
-			right, _ := v.text.Measure(text[:runeByteOffset(text, min(n, hi))], font, false)
+			left := v.inputAdvance(text[:runeByteOffset(text, max(0, lo))], font)
+			right := v.inputAdvance(text[:runeByteOffset(text, min(n, hi))], font)
 			if caret {
-				p.Rect(Rect{x + left, y, 1.4, lineH}, v.theme.Accent)
+				p.Rect(v.inputCaretRect(e, x+left, y), v.theme.Accent)
 			} else if right > left {
 				p.Rect(Rect{x + left, y, right - left, lineH}, mix(v.theme.Surface, v.theme.Accent, .2))
 			}

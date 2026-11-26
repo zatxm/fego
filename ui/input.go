@@ -763,6 +763,23 @@ func (v *view) sortTable(e *Element, x float32) {
 	e.own().selected = -1
 	e.touch(false)
 }
+func (v *view) inputLineHeight(font float32) float32 {
+	return v.text.LineHeight(font*v.scale, false) / v.scale
+}
+
+func (v *view) inputAdvance(text string, font float32) float32 {
+	// Hinted glyph advances depend on the device-pixel font size.
+	w, _ := v.text.Measure(text, font*v.scale, false)
+	return w / v.scale
+}
+
+func inputDisplayLine(text string, password bool) string {
+	if password {
+		return strings.Repeat("•", utf8.RuneCountInString(text))
+	}
+	return text
+}
+
 func (v *view) inputInner(e *Element) Rect {
 	r := e.rect
 	inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
@@ -770,7 +787,7 @@ func (v *view) inputInner(e *Element) Rect {
 		inner.X, inner.W = r.X+7, max(0, r.W-14)
 	}
 	if !e.multiline {
-		line := v.text.LineHeight(v.font(e), false)
+		line := v.inputLineHeight(v.font(e))
 		inner.Y = r.Y + (r.H-line)/2
 		inner.H = line
 	}
@@ -786,7 +803,8 @@ func (v *view) textPosition(e *Element, x, y float32) int {
 	}
 	inner := v.inputInner(e)
 	font := v.font(e)
-	row := max(0, int((y-inner.Y+e.scroll)/v.text.LineHeight(font, false)))
+	row := max(0, int((y-inner.Y+e.scroll)/v.inputLineHeight(font)))
+	hitX := (x - inner.X + e.scrollX) * v.scale
 	if e.kind == kEditor {
 		s := e.sourceIndex()
 		if row >= s.visibleCount() {
@@ -794,7 +812,7 @@ func (v *view) textPosition(e *Element, x, y float32) int {
 		}
 		line := s.source(row)
 		head := s.head(e.text, line)
-		return head.rune + v.text.Hit(e.text[head.pos:lineEnd(e.text, head.pos)], font, false, x-inner.X+e.scrollX)
+		return head.rune + v.text.Hit(e.text[head.pos:lineEnd(e.text, head.pos)], font*v.scale, false, hitX)
 	}
 	start, offset := 0, 0
 	for row > 0 {
@@ -810,11 +828,8 @@ func (v *view) textPosition(e *Element, x, y float32) int {
 	if end < 0 {
 		end = len(e.text) - start
 	}
-	line := e.text[start : start+end]
-	if e.password {
-		line = strings.Repeat("•", utf8.RuneCountInString(line))
-	}
-	return offset + v.text.Hit(line, font, false, x-inner.X+e.scrollX)
+	line := inputDisplayLine(e.text[start:start+end], e.password)
+	return offset + v.text.Hit(line, font*v.scale, false, hitX)
 }
 
 func runeByteOffset(s string, n int) int {
@@ -832,21 +847,33 @@ func (v *view) caretPosition(e *Element, inner Rect) (float32, float32) {
 		slot := e.otpSlot(min(e.cursor, e.otpLength-1))
 		return slot.X + slot.W/2, inner.Y
 	}
+	font := v.font(e)
+	lineH := v.inputLineHeight(font)
 	if e.kind == kEditor {
 		s := e.sourceIndex()
 		i, line := s.locate(e.text, e.cursor)
 		part := e.text[line.pos : line.pos+runeByteOffset(e.text[line.pos:], e.cursor-line.rune)]
-		w, _ := v.text.Measure(part, v.font(e), false)
-		return inner.X + w - e.scrollX, inner.Y + float32(s.visual(i))*v.text.LineHeight(v.font(e), false) - e.scroll
+		return inner.X + v.inputAdvance(part, font) - e.scrollX, inner.Y + float32(s.visual(i))*lineH - e.scroll
 	}
 	prefix := e.text[:runeByteOffset(e.text, e.cursor)]
 	row := strings.Count(prefix, "\n")
 	prefix = prefix[strings.LastIndexByte(prefix, '\n')+1:]
-	if e.password {
-		prefix = strings.Repeat("•", utf8.RuneCountInString(prefix))
+	return inner.X + v.inputAdvance(inputDisplayLine(prefix, e.password), font) - e.scrollX,
+		inner.Y + float32(row)*lineH - e.scroll
+}
+
+func (v *view) inputCaretRect(e *Element, x, y float32) Rect {
+	if e.otpLength > 0 {
+		slot := e.otpSlot(min(e.cursor, e.otpLength-1))
+		return Rect{x, slot.Y + (slot.H-14)/2, 1, 14}
 	}
-	w, _ := v.text.Measure(prefix, v.font(e), false)
-	return inner.X + w - e.scrollX, inner.Y + float32(row)*v.text.LineHeight(v.font(e), false) - e.scroll
+	font := v.font(e)
+	lineH := v.inputLineHeight(font)
+	if e.kind == kEditor {
+		return Rect{x, y, 1.4, lineH}
+	}
+	height := min(lineH, font*1.25)
+	return Rect{x, y + (lineH-height)/2, 1.4, height}
 }
 
 func (v *view) updateCaret() {
@@ -866,7 +893,7 @@ func (v *view) updateCaret() {
 	if e.scrollX != previous {
 		x, y = v.caretPosition(e, inner)
 	}
-	r := Rect{x, y, 2, v.text.LineHeight(v.font(e), false)}
+	r := v.inputCaretRect(e, x, y)
 	v.host.TextInput(true, r.pixels(v.scale))
 	if h, ok := v.host.(interface {
 		SetTextInputState(string, int, int, bool, bool)
@@ -954,12 +981,13 @@ func (v *view) replaceSelection(e *Element, text string) {
 func (v *view) edited(e *Element) {
 	e.scroll = min(e.scroll, e.maxScroll())
 	if e.multiline {
-		_, y := v.caretPosition(e, v.inputInner(e))
 		inner := v.inputInner(e)
+		_, y := v.caretPosition(e, inner)
+		lineH := v.inputLineHeight(v.font(e))
 		if y < inner.Y {
 			e.scroll = max(0, e.scroll-(inner.Y-y))
-		} else if y+v.text.LineHeight(v.font(e), false) > inner.Y+inner.H {
-			e.scroll = min(e.maxScroll(), e.scroll+y+v.text.LineHeight(v.font(e), false)-inner.Y-inner.H)
+		} else if y+lineH > inner.Y+inner.H {
+			e.scroll = min(e.maxScroll(), e.scroll+y+lineH-inner.Y-inner.H)
 		}
 	}
 	e.touchInputText()
@@ -1099,7 +1127,7 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		}
 	case "ArrowUp", "ArrowDown":
 		x, y := v.caretPosition(e, v.inputInner(e))
-		dy := v.text.LineHeight(v.font(e), false)
+		dy := v.inputLineHeight(v.font(e))
 		if ev.Key == "ArrowUp" {
 			dy = -dy
 		}

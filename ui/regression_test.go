@@ -9,6 +9,7 @@ import (
 	"math/rand/v2"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/zatxm/fego/v26"
 	fonttext "github.com/zatxm/fego/v26/internal/text"
@@ -79,6 +80,72 @@ func TestInputScrollAndEmptyWordNavigation(t *testing.T) {
 	view.Key("Home", false, true)
 	if input.scrollX != 0 {
 		t.Fatal("Home did not reveal start")
+	}
+}
+
+func TestInputCaretUsesPaintedCoordinates(t *testing.T) {
+	for _, scale := range []float32{1, 4.0 / 3, 2} {
+		for _, tc := range []struct {
+			name, text, visibleLine string
+			element                 *Element
+			row                     int
+		}{
+			{"text", "Wii 自用 WWW", "Wii 自用 WWW", TextInput(""), 0},
+			{"password", "Wii 自用", "••••••", TextInput("").Password(true), 0},
+			{"masked-multiline", "私钥\nWWi", "•••", TextArea("").Password(true), 1},
+			{"editor", "首行\nWii 自用", "Wii 自用", CodeEditor(""), 1},
+		} {
+			t.Run(fmt.Sprintf("%s/%g", tc.name, scale), func(t *testing.T) {
+				field := tc.element.Width(260)
+				tester := NewTester(Column(field), 700, 420)
+				defer tester.Close()
+				tester.Scale = scale
+				v := tester.Document.live
+				v.frame(false)
+				clickElement(tester, field)
+				tester.Type(tc.text)
+				inner := v.inputInner(field)
+				font := v.font(field)
+				width, _ := v.text.Measure(tc.visibleLine, font*scale, false)
+				wantX := (inner.X-field.scrollX)*scale + width
+				lineHeight := v.text.LineHeight(font*scale, false)
+				wantY := (inner.Y-field.scroll)*scale + (float32(tc.row)+.5)*lineHeight
+				got := tester.Caret
+				if !tester.Editing || math.Abs(float64(float32(got.Min.X)-wantX)) > 1 ||
+					math.Abs(float64(float32(got.Min.Y+got.Max.Y)/2-wantY)) > 1 {
+					t.Fatalf("caret %v, want x %.2f and center y %.2f", got, wantX, wantY)
+				}
+				img := tester.Snapshot()
+				accent := v.theme.Accent
+				if pixel := img.RGBAAt(got.Min.X, (got.Min.Y+got.Max.Y)/2); pixel != (color.RGBA{accent.R, accent.G, accent.B, accent.A}) {
+					t.Fatalf("painted caret and IME caret disagree at %v: %v", got, pixel)
+				}
+				tester.Click(wantX/scale, wantY/scale)
+				if field.cursor != utf8.RuneCountInString(tc.text) {
+					t.Fatalf("click at painted end went to rune %d", field.cursor)
+				}
+				if tc.name == "masked-multiline" {
+					ink := v.theme.Text
+					first := image.Rect(int(inner.X*scale), int(inner.Y*scale), int(inner.X*scale+width), int(inner.Y*scale+lineHeight))
+					second := first.Add(image.Pt(0, int(lineHeight)))
+					for row, rect := range []image.Rectangle{first, second} {
+						found := false
+						for y := rect.Min.Y; y < rect.Max.Y && !found; y++ {
+							for x := rect.Min.X; x < rect.Max.X; x++ {
+								pixel := img.RGBAAt(x, y)
+								if math.Abs(float64(int(pixel.R)-int(ink.R))) < 20 {
+									found = true
+									break
+								}
+							}
+						}
+						if !found {
+							t.Fatalf("missing password mask on row %d", row+1)
+						}
+					}
+				}
+			})
+		}
 	}
 }
 
