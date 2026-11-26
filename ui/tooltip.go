@@ -11,13 +11,13 @@ import (
 const tooltipDelay = 500 * time.Millisecond
 
 type tooltip struct {
-	text   string
-	target *Element
-	shown  bool
-	rect   Rect
-	x, y   float32
-	above  bool
-	cancel func()
+	text    string
+	target  *Element
+	shown   bool
+	rect    Rect
+	anchorX float32
+	above   bool
+	cancel  func()
 }
 
 // delayer is implemented by hosts that can run work on the UI thread later.
@@ -26,7 +26,7 @@ type delayer interface {
 	After(time.Duration, func()) (cancel func())
 }
 
-// Tooltip shows s near the pointer after it rests on the element. Elements
+// Tooltip shows s next to the element after the pointer rests on it. Elements
 // without their own tooltip inside it show the nearest ancestor's.
 func (e *Element) Tooltip(s string) *Element {
 	if e.tooltip == s {
@@ -68,7 +68,6 @@ func (v *view) trackTip(root *Element, x, y float32) {
 	if t == nil {
 		return
 	}
-	v.tip.x, v.tip.y = x, y
 	if d, ok := v.host.(delayer); ok {
 		v.tip.cancel = d.After(tooltipDelay, func() {
 			if v.tip.target == t && t.view == v && !v.tip.shown {
@@ -128,13 +127,15 @@ func (v *view) showTip(t *Element) {
 		tw, th = v.text.Measure(v.tip.text, size, false)
 	}
 	w, h := tw+24, th+12
-	x, y := v.tip.x-w/2, v.tip.y+16
-	v.tip.above = y+h > height-10
+	const margin, gap = 4, 8
+	anchor := t.rect.intersect(t.clip)
+	v.tip.anchorX = anchor.X + anchor.W/2
+	x, y := v.tip.anchorX-w/2, anchor.Y+anchor.H+gap
+	v.tip.above = y+h > height-margin
 	if v.tip.above {
-		// Flip above the pointer near the bottom edge.
-		y = v.tip.y - h - 8
+		y = anchor.Y - h - gap
 	}
-	v.tip.rect = Rect{max(4, min(x, width-w-4)), max(4, y), w, h}
+	v.tip.rect = Rect{max(margin, min(x, width-w-margin)), max(margin, min(y, height-h-margin)), w, h}
 	v.tip.shown = true
 	v.damageTip()
 }
@@ -158,7 +159,7 @@ func (v *view) paintTip(p *Painter) {
 	}
 	r := v.tip.rect
 	p.RoundRect(r, 6, v.theme.Text)
-	x := max(r.X+8, min(v.tip.x, r.X+r.W-8))
+	x := max(r.X+8, min(v.tip.anchorX, r.X+r.W-8))
 	y, direction := r.Y, float32(-1)
 	if v.tip.above {
 		y, direction = r.Y+r.H, 1

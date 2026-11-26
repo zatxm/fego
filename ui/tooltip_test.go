@@ -7,7 +7,7 @@ import (
 	"github.com/zatxm/fego/v26"
 )
 
-func TestTooltipFollowsPointerAndDismisses(t *testing.T) {
+func TestTooltipAnchorsToElementAndDismisses(t *testing.T) {
 	icon := Text("i")
 	button := Button("", nil).Tooltip("Delete node")
 	row := Row(icon, button).Tooltip("Row help")
@@ -31,6 +31,15 @@ func TestTooltipFollowsPointerAndDismisses(t *testing.T) {
 	if string(before.Pix) == string(after.Pix) {
 		t.Fatal("tooltip was not painted")
 	}
+	first := v.tip.rect
+	bounds := button.Bounds()
+	for _, x := range []float32{bounds.X + 2, bounds.X + bounds.W - 2} {
+		move(icon)
+		view.Send(fego.Event{Kind: fego.PointerMove, X: x, Y: bounds.Y + 2})
+		if !v.tip.shown || v.tip.rect != first || v.tip.anchorX != bounds.X+bounds.W/2 {
+			t.Fatalf("tooltip moved with the pointer: got %v, want %v", v.tip.rect, first)
+		}
+	}
 	move(icon)
 	if v.tip.target != row {
 		t.Fatal("element without a tooltip did not use its ancestor's")
@@ -48,6 +57,18 @@ func TestTooltipFollowsPointerAndDismisses(t *testing.T) {
 	view.Step()
 	if v.tip.target != nil || v.tip.shown {
 		t.Fatal("tooltip kept a detached element")
+	}
+}
+
+func TestTooltipFitsAtWindowEdges(t *testing.T) {
+	button := Button("", nil).Size(28, 24).Tooltip("Delete node")
+	view := NewTester(Column(Box().Height(170), Row(Box().Width(210), button)), 240, 200)
+	defer view.Close()
+	bounds := button.Bounds()
+	view.Send(fego.Event{Kind: fego.PointerMove, X: bounds.X + 2, Y: bounds.Y + 2})
+	tip := view.Document.live.tip
+	if r := tip.rect; !tip.shown || !tip.above || r.Y+r.H >= bounds.Y || r.X+r.W >= 240 {
+		t.Fatalf("tooltip did not fit above its anchor: button %v, tooltip %v", bounds, r)
 	}
 }
 
