@@ -8,6 +8,7 @@ import (
 
 	"github.com/zatxm/fego/v26"
 	fonttext "github.com/zatxm/fego/v26/internal/text"
+	"golang.org/x/image/font/sfnt"
 )
 
 type Document struct {
@@ -15,6 +16,8 @@ type Document struct {
 	root            *Element
 	theme           Theme
 	live            *view
+	monoRegular     *sfnt.Font
+	monoBold        *sfnt.Font
 }
 
 func View(root *Element) *Document {
@@ -45,11 +48,34 @@ func (d *Document) Theme(theme Theme) *Document {
 	}
 	return d
 }
+
+// MonospaceFont sets the faces used by Painter.UseMonospace. A nil bold face
+// uses regular for both weights. A nil regular face restores built-in Go Mono.
+func (d *Document) MonospaceFont(regular, bold *sfnt.Font) *Document {
+	d.monoRegular, d.monoBold = regular, bold
+	if v := d.live; v != nil {
+		if v.mono != nil {
+			v.mono.Close()
+		}
+		v.mono = d.newMonospace()
+		v.repaint(d.root, false)
+	}
+	return d
+}
+
+func (d *Document) newMonospace() *fonttext.System {
+	if d.monoRegular != nil {
+		return fonttext.NewMonospaceWith(d.monoRegular, d.monoBold)
+	}
+	return nil
+}
+
 func (d *Document) Mount(host fego.Host) fego.View {
 	if d.live != nil || d.root.view != nil || d.root.parent != nil {
 		panic("ui: a Document belongs to one window")
 	}
 	v := &view{doc: d, root: d.root, host: host, theme: d.theme, text: fonttext.New(), needsLayout: true, focusVisible: true, hoveredRow: -1}
+	v.mono = d.newMonospace()
 	if r, ok := host.(regionHost); ok && r.RetainsPixels() {
 		v.region = r
 	}

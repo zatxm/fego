@@ -13,7 +13,47 @@ import (
 
 	"github.com/zatxm/fego/v26"
 	fonttext "github.com/zatxm/fego/v26/internal/text"
+	"golang.org/x/image/font/gofont/gobold"
+	"golang.org/x/image/font/gofont/goregular"
+	"golang.org/x/image/font/sfnt"
 )
+
+func TestDocumentMonospaceFont(t *testing.T) {
+	regular, err := sfnt.Parse(goregular.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bold, err := sfnt.Parse(gobold.TTF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var regularWidth, boldWidth float32
+	canvas := Canvas(120, 40, func(p *Painter) {
+		p.UseMonospace()
+		regularWidth, _ = p.Measure("iiii", 20, false)
+		boldWidth, _ = p.Measure("iiii", 20, true)
+	})
+	doc := View(canvas).MonospaceFont(regular, bold)
+	tester := NewDocumentTester(doc, 180, 80)
+	defer tester.Close()
+	custom := fonttext.NewMonospaceWith(regular, bold)
+	defer custom.Close()
+	wantRegular, _ := custom.Measure("iiii", 20, false)
+	wantBold, _ := custom.Measure("iiii", 20, true)
+	if regularWidth != wantRegular || boldWidth != wantBold {
+		t.Fatalf("custom faces measured %v, %v, want %v, %v", regularWidth, boldWidth, wantRegular, wantBold)
+	}
+	doc.MonospaceFont(regular, nil)
+	tester.Step()
+	if regularWidth != wantRegular || boldWidth != wantRegular {
+		t.Fatal("missing bold face did not use the custom regular face")
+	}
+	doc.MonospaceFont(nil, nil)
+	tester.Step()
+	if regularWidth == wantRegular {
+		t.Fatal("reset did not restore Go Mono")
+	}
+}
 
 func TestFillDimensionsAndScrollClipping(t *testing.T) {
 	sidebar := Column(Text("nav")).Width(190).FillHeight()

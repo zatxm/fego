@@ -284,8 +284,8 @@ func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c
 	}
 }
 
-// UseMonospace selects a fixed-pitch face for subsequent Label and Measure
-// calls in this canvas draw. All canvases in the view share its glyph cache.
+// UseMonospace selects the document's monospace face for subsequent Label and
+// Measure calls in this canvas draw. The default face is Go Mono.
 func (p *Painter) UseMonospace() {
 	if *p.mono == nil {
 		*p.mono = fonttext.NewMonospace()

@@ -26,3 +26,12 @@ func NewMonospace() *System {
 	s.regular = monoFonts()
 	return s
 }
+
+func NewMonospaceWith(regular, bold *sfnt.Font) *System {
+	if bold == nil {
+		bold = regular
+	}
+	s := New()
+	s.regular = [2]*source{{font: regular}, {font: bold}}
+	return s
+}
