@@ -84,6 +84,7 @@ type glPresenter struct {
 	scratchSize  image.Point
 	blitArgs     [10]uintptr
 	copyFailed   bool
+	readBuffer   uint32
 	// damage collects this frame's changed rects, top-left origin. A custom
 	// shader may spread changes, and a new texture is all new: swap everything.
 	damage     []image.Rectangle
@@ -108,8 +109,12 @@ func newGLPresenter(ctx glContext) (*glPresenter, error) {
 	}
 	p := &glPresenter{ctx: ctx, gl: g}
 	g.getInteger(0x0d33, &p.maxTexture)
-	if err := p.shader(""); err != nil {
-		return nil, err
+	// The Linux presenter can copy the retained texture directly to the back
+	// buffer. Only a custom effect, or a driver without blits, needs a shader.
+	if g.blitFramebuffer == 0 {
+		if err := p.shader(""); err != nil {
+			return nil, err
+		}
 	}
 	var vao, texture uint32
 	g.genVertexArrays(1, &vao)
@@ -117,19 +122,33 @@ func newGLPresenter(ctx glContext) (*glPresenter, error) {
 	g.genTextures(1, &texture)
 	g.bindTexture(0x0de1, texture)
 	p.texture = texture
-	for _, key := range []uint32{0x2800, 0x2801} {
-		g.textureParameter(0x0de1, key, 0x2600)
-	}
-	for _, key := range []uint32{0x2802, 0x2803} {
-		g.textureParameter(0x0de1, key, 0x812f)
-	}
+	p.textureParameters()
 	if code := g.getError(); code != 0 {
 		return nil, fmt.Errorf("initialize OpenGL: %#x", code)
 	}
 	return p, nil
 }
 
+func (p *glPresenter) textureParameters() {
+	g := &p.gl
+	for _, key := range []uint32{0x2800, 0x2801} {
+		g.textureParameter(0x0de1, key, 0x2600)
+	}
+	for _, key := range []uint32{0x2802, 0x2803} {
+		g.textureParameter(0x0de1, key, 0x812f)
+	}
+}
+
 func (p *glPresenter) shader(source string) error {
+	if (source == "" || source == FrameFragmentDefault) && p.gl.blitFramebuffer != 0 && !p.copyFailed {
+		if p.program != 0 {
+			p.gl.useProgram(0)
+			p.gl.deleteProgram(p.program)
+			p.program = 0
+		}
+		p.custom, p.fullDamage = false, true
+		return nil
+	}
 	if source == "" {
 		source = FrameFragmentDefault
 	}
@@ -208,7 +227,6 @@ func (p *glPresenter) present(img *image.RGBA, damage []image.Rectangle) bool {
 	if img == nil || img.Rect.Empty() || max(img.Rect.Dx(), img.Rect.Dy()) > int(p.maxTexture) || !p.ctx.MakeCurrent() {
 		return false
 	}
-	g := &p.gl
 	size := img.Rect.Size()
 	p.setUnpackLength(int32(img.Stride / 4))
 	if size != p.size {
@@ -218,14 +236,15 @@ func (p *glPresenter) present(img *image.RGBA, damage []image.Rectangle) bool {
 			r = r.Intersect(img.Rect)
 			if !r.Empty() {
 				offset := img.PixOffset(r.Min.X, r.Min.Y)
-				g.textureSubImage(0x0de1, 0, int32(r.Min.X-img.Rect.Min.X), int32(r.Min.Y-img.Rect.Min.Y), int32(r.Dx()), int32(r.Dy()), 0x1908, 0x1401, unsafe.Pointer(&img.Pix[offset]))
+				p.upload(r.Sub(img.Rect.Min), &img.Pix[offset])
 			}
 		}
 	}
 	runtime.KeepAlive(img)
-	g.drawArrays(4, 0, 3)
+	p.fullDamage = true
+	drawn := p.drawFrame()
 	p.damage, p.fullDamage = p.damage[:0], false
-	return g.getError() == 0 && p.ctx.Swap()
+	return drawn && p.ctx.Swap()
 }
 
 func (s *gpuState) presentRegions(size image.Point, paint func(func(*image.RGBA))) bool {
@@ -237,18 +256,24 @@ func (s *gpuState) presentRegions(size image.Point, paint func(func(*image.RGBA)
 		s.close()
 		return false
 	}
-	g := &p.gl
 	if size != p.size {
 		p.resize(size, nil)
 		p.fullDamage = true
 	}
 	paint(p.uploadRegion)
-	g.drawArrays(4, 0, 3)
-	if g.getError() != 0 || !p.swap() {
+	if !p.drawFrame() || !p.swap() {
 		s.close()
 		return false
 	}
 	return true
+}
+
+func (p *glPresenter) drawFrame() bool {
+	if c, ok := p.ctx.(interface{ drawBackBuffer(*glPresenter) bool }); ok {
+		return c.drawBackBuffer(p)
+	}
+	p.gl.drawArrays(4, 0, 3)
+	return p.gl.getError() == 0
 }
 
 // Beyond this many rects the display server gets one bounding rect.
@@ -285,20 +310,31 @@ func (p *glPresenter) uploadRegion(img *image.RGBA) {
 	if r.Empty() {
 		return
 	}
-	g := &p.gl
 	p.damage = append(p.damage, r)
 	length := int32(0)
 	if img.Stride != 4*r.Dx() {
 		length = int32(img.Stride / 4)
 	}
 	p.setUnpackLength(length)
-	g.textureSubImage(0x0de1, 0, int32(r.Min.X), int32(r.Min.Y), int32(r.Dx()), int32(r.Dy()), 0x1908, 0x1401, unsafe.Pointer(&img.Pix[img.PixOffset(r.Min.X, r.Min.Y)]))
+	p.upload(r, &img.Pix[img.PixOffset(r.Min.X, r.Min.Y)])
 	runtime.KeepAlive(img)
+}
+
+func (p *glPresenter) upload(r image.Rectangle, pixels *byte) {
+	p.blitArgs = [10]uintptr{0x0de1, 0, uintptr(r.Min.X), uintptr(r.Min.Y), uintptr(r.Dx()), uintptr(r.Dy()), 0x1908, 0x1401, uintptr(unsafe.Pointer(pixels))}
+	purego.SyscallN(p.gl.textureSubImage, p.blitArgs[:9]...)
+	runtime.KeepAlive(pixels)
 }
 
 // These integer-only GL calls run several times per scroll. Reuse their
 // argument storage instead of boxing coordinates for each driver call.
 func (p *glPresenter) bindFramebuffer(target, buffer uint32) {
+	if target == 0x8ca8 && p.readBuffer == buffer { // GL_READ_FRAMEBUFFER
+		return
+	}
+	if target != 0x8ca9 { // A draw-only bind leaves the read framebuffer alone.
+		p.readBuffer = buffer
+	}
 	p.blitArgs[0], p.blitArgs[1] = uintptr(target), uintptr(buffer)
 	purego.SyscallN(p.gl.bindFramebuffer, p.blitArgs[:2]...)
 }
@@ -329,9 +365,18 @@ func (s *gpuState) scroll(r image.Rectangle, delta image.Point) bool {
 	const read, draw, color, texture2D = 0x8ca8, 0x8ca9, 0x8ce0, 0x0de1
 	if p.framebuffers[0] == 0 {
 		g.genFramebuffers(2, &p.framebuffers[0])
-		g.genTextures(1, &p.scratch)
 	}
+	if p.scratch == 0 {
+		g.genTextures(1, &p.scratch)
+		g.bindTexture(texture2D, p.scratch)
+		p.textureParameters()
+		g.bindTexture(texture2D, p.texture)
+	}
+	whole := r == (image.Rectangle{Max: p.size})
 	size := src.Size()
+	if whole {
+		size = p.size
+	}
 	grew := size.X > p.scratchSize.X || size.Y > p.scratchSize.Y
 	if grew {
 		p.scratchSize = image.Pt(max(size.X, p.scratchSize.X), max(size.Y, p.scratchSize.Y))
@@ -354,11 +399,27 @@ func (s *gpuState) scroll(r image.Rectangle, delta image.Point) bool {
 			return false
 		}
 	}
-	scratchRect := image.Rectangle{Max: size}
-	p.blit(src, scratchRect)
-	p.bindFramebuffer(read, scratch)
-	p.bindFramebuffer(draw, frame)
-	p.blit(scratchRect, dst)
+	if whole && p.scratchSize == p.size {
+		// A full-window scroll can make the destination the next frame
+		// texture. Preserve the exposed edge for callers that repaint later.
+		p.blit(src, dst)
+		edge := r
+		if delta.Y > 0 {
+			edge.Max.Y = dst.Min.Y
+		} else {
+			edge.Min.Y = dst.Max.Y
+		}
+		p.blit(edge, edge)
+		p.texture, p.scratch = p.scratch, p.texture
+		p.framebuffers[0], p.framebuffers[1] = scratch, frame
+		g.bindTexture(texture2D, p.texture)
+	} else {
+		scratchRect := image.Rectangle{Max: src.Size()}
+		p.blit(src, scratchRect)
+		p.bindFramebuffer(read, scratch)
+		p.bindFramebuffer(draw, frame)
+		p.blit(scratchRect, dst)
+	}
 	p.bindFramebuffer(0x8d40, 0)
 	if g.getError() != 0 {
 		p.copyFailed = true

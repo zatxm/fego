@@ -46,7 +46,7 @@ const (
 	xWindowMask       = 1 | 2 | 4 | 8 | 1<<6 | 1<<15 | 1<<17 | 1<<21 | xPropertyMask
 	xMaxClipboard     = 16 << 20
 	xMaxPixels        = 64 << 20
-	xUploadBytes      = (512 << 10) - 64 // Bound staging memory without excessive Xwayland damage requests.
+	xUploadBytes      = (384 << 10) - 64 // Bound staging memory without excessive Xwayland damage requests.
 	xUploadIdleBytes  = 128 << 10
 	xUploadIdleTime   = 250 * time.Millisecond
 )
@@ -930,6 +930,7 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 		damage = []image.Rectangle{bounds}
 	}
 	if w.present(src, damage, bounds.Min) {
+		w.flushImage()
 		w.surfaceSize = bounds.Size()
 		for _, r := range damage {
 			w.restore(r.Intersect(bounds).Sub(bounds.Min))
@@ -940,14 +941,31 @@ func (w *xWindow) Present(src *image.RGBA, damage []image.Rectangle) {
 // PresentRegion uploads a damaged region; the X server retains the rest and
 // reports lost pixels with Expose, which becomes a full Paint event.
 func (w *xWindow) PresentRegion(src *image.RGBA) {
+	w.queueRegion(src)
+	w.flushImage()
+}
+
+// All bands belong to one frame. Xlib can queue them until the final flush.
+func (w *xWindow) PresentRegions(paint func(func(*image.RGBA))) {
+	paint(w.queueRegion)
+	w.flushImage()
+}
+
+func (w *xWindow) queueRegion(src *image.RGBA) {
 	if w.closed || src == nil {
 		return
 	}
 	damage := [1]image.Rectangle{src.Rect}
 	if w.present(src, damage[:], image.Point{}) {
-		// A later full-surface Present must upload everything again.
 		w.surfaceSize = image.Point{}
 		w.restore(src.Rect)
+	}
+}
+
+func (w *xWindow) flushImage() {
+	if !w.closed {
+		w.putArgs[0] = w.b.display
+		purego.SyscallN(xl.flushImage, w.putArgs[:1]...)
 	}
 }
 
@@ -1018,8 +1036,6 @@ func (w *xWindow) present(src *image.RGBA, damage []image.Rectangle, origin imag
 		}
 	}
 	runtime.KeepAlive(src)
-	w.putArgs[0] = w.b.display
-	purego.SyscallN(xl.flushImage, w.putArgs[:1]...)
 	runtime.KeepAlive(w)
 	if capacity > xUploadIdleBytes {
 		w.uploadIdleAt = time.Now().Add(xUploadIdleTime)
@@ -1135,6 +1151,17 @@ func (w *xWindow) ScrollPixels(r image.Rectangle, delta image.Point) bool {
 }
 
 func xCopyPixels(dst []byte, stride int, src *image.RGBA, r image.Rectangle, bigEndian bool) {
+	if r.Empty() {
+		return
+	}
+	width := r.Dx() * 4
+	dest := (r.Min.Y-src.Rect.Min.Y)*stride + (r.Min.X-src.Rect.Min.X)*4
+	if !bigEndian && stride == width && src.Stride == width {
+		n := width * r.Dy()
+		at := src.PixOffset(r.Min.X, r.Min.Y)
+		xCopyBGRX(dst[dest:dest+n], src.Pix[at:at+n])
+		return
+	}
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		s := src.Pix[src.PixOffset(r.Min.X, y):][:r.Dx()*4]
 		d := dst[(y-src.Rect.Min.Y)*stride+(r.Min.X-src.Rect.Min.X)*4:][:len(s)]
@@ -1144,17 +1171,21 @@ func xCopyPixels(dst []byte, stride int, src *image.RGBA, r image.Rectangle, big
 			}
 			continue
 		}
-		// Both supported Linux architectures permit unaligned little-endian words.
-		sw := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(s))), len(s)/8)
-		dw := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(d))), len(d)/8)
-		for i, v := range sw {
-			// Reverse and rotate two RGBA pixels into BGRX, then force opaque alpha.
-			dw[i] = bits.RotateLeft64(bits.ReverseBytes64(v), 24) | 0xff000000ff000000
-		}
-		if len(s)%8 != 0 {
-			i := len(s) - 4
-			d[i], d[i+1], d[i+2], d[i+3] = s[i+2], s[i+1], s[i], 255
-		}
+		xCopyBGRX(d, s)
+	}
+}
+
+func xCopyWords(d, s []byte) {
+	// Both supported Linux architectures permit unaligned little-endian words.
+	sw := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(s))), len(s)/8)
+	dw := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(d))), len(d)/8)
+	for i, v := range sw {
+		// Reverse and rotate two RGBA pixels into BGRX, then force opaque alpha.
+		dw[i] = bits.RotateLeft64(bits.ReverseBytes64(v), 24) | 0xff000000ff000000
+	}
+	if len(s)%8 != 0 {
+		i := len(s) - 4
+		d[i], d[i+1], d[i+2], d[i+3] = s[i+2], s[i+1], s[i], 255
 	}
 }
 

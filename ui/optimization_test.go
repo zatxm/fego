@@ -636,3 +636,41 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(code)
 }
+
+func TestShortInputDamageMatchesFullPaint(t *testing.T) {
+	for _, scale := range []float32{1, 1.25, 2} {
+		input := TextInput("Wi").Placeholder("姓名").Width(220)
+		h := newScrollScreen(View(Column(input).Padding(8)), scale, true)
+		h.Click(input.rect.X+12, input.rect.Y+12)
+		for _, value := range []string{"", "A", "中文", "AV", "i", "Wi", "A", "Wi", "A\u0301", "x\ty", "日本", "", "Wi"} {
+			input.SetText(value)
+			h.Step()
+			checkScrollPixels(t, h)
+		}
+		input.SetText("A")
+		h.Step()
+		for _, d := range h.Damage() {
+			if d.Dx() >= input.rect.pixels(scale).Dx()/2 {
+				t.Fatalf("short cached edit repainted a full line at scale %g: %v", scale, d)
+			}
+		}
+		checkScrollPixels(t, h)
+		h.Close()
+	}
+}
+
+func TestPackedBlendRoundsLikeScalar(t *testing.T) {
+	for a := range 256 {
+		for v := range 256 {
+			base := [4]byte{byte(v), byte(255 - v), byte(v ^ 127), byte(v * 79)}
+			ink := RGBA(byte(v*23), byte(v^165), byte(255-v), uint8(a))
+			got := base
+			blendPixel(got[:], ink)
+			for i, c := range [4]byte{ink.R, ink.G, ink.B, 255} {
+				if want := byte((int(c)*a + int(base[i])*(255-a) + 127) / 255); got[i] != want {
+					t.Fatalf("alpha=%d base=%v ink=%v channel=%d got=%d want=%d", a, base, ink, i, got[i], want)
+				}
+			}
+		}
+	}
+}

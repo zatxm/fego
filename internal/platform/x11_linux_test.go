@@ -467,45 +467,104 @@ func testX11Native(t *testing.T, shm bool) {
 					if !w.AwaitGPU() || !w.GPUActive() {
 						t.Error("hardware OpenGL did not initialize")
 					} else {
-						if !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) {
-							// Mix tightly packed and strided bands in the same frame.
-							upload(img.SubImage(image.Rect(0, 0, 160, 53)).(*image.RGBA))
-							upload(img.SubImage(image.Rect(0, 53, 80, 100)).(*image.RGBA))
-							upload(img.SubImage(image.Rect(80, 53, 160, 100)).(*image.RGBA))
-						}) || !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) { upload(region) }) {
-							t.Error("OpenGL region upload or swap failed")
-						}
-						// Presents use EGL's own connection; wait for them before reading back.
-						syncX(b.eglXDisplay, 0)
-						actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
-						if actual == nil {
-							t.Error("OpenGL readback failed")
-						} else {
-							if getPixel(actual, 51, 61)&0xffffff != 0x624c36 || getPixel(actual, 54, 61)&0xffffff != 0xc81e28 {
-								t.Errorf("OpenGL region or retained background mismatch: %#x, %#x", getPixel(actual, 51, 61), getPixel(actual, 54, 61))
+						func() {
+							if !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) {
+								// Mix tightly packed and strided bands in the same frame.
+								upload(img.SubImage(image.Rect(0, 0, 160, 53)).(*image.RGBA))
+								upload(img.SubImage(image.Rect(0, 53, 80, 100)).(*image.RGBA))
+								upload(img.SubImage(image.Rect(80, 53, 160, 100)).(*image.RGBA))
+							}) || !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) { upload(region) }) {
+								t.Error("OpenGL region upload or swap failed")
 							}
-							xl.destroyImage(actual)
-						}
-						// Scrolling copies retained texture pixels; only the frame is swapped again.
-						for _, step := range []struct{ dy, from, to int32 }{{-7, 61, 54}, {7, 54, 61}} {
-							if !w.ScrollPixels(image.Rect(0, 10, 160, 90), image.Pt(0, int(step.dy))) ||
-								!w.PresentGPURegions(img.Rect.Size(), func(func(*image.RGBA)) {}) {
-								t.Error("OpenGL scroll copy rejected")
-								break
-							}
+							// Presents use EGL's own connection; wait for them before reading back.
 							syncX(b.eglXDisplay, 0)
 							actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
 							if actual == nil {
-								t.Error("OpenGL scroll readback failed")
-								break
+								t.Error("OpenGL readback failed")
+							} else {
+								if getPixel(actual, 51, 61)&0xffffff != 0x624c36 || getPixel(actual, 54, 61)&0xffffff != 0xc81e28 {
+									t.Errorf("OpenGL region or retained background mismatch: %#x, %#x", getPixel(actual, 51, 61), getPixel(actual, 54, 61))
+								}
+								xl.destroyImage(actual)
 							}
-							moved, vacated, outside := getPixel(actual, 51, step.to)&0xffffff, getPixel(actual, 51, step.from)&0xffffff, getPixel(actual, 51, 5)&0xffffff
-							if moved != 0x624c36 || vacated != 0xc81e28 || outside != 0x00c800 {
-								t.Errorf("OpenGL scroll %d moved %#x vacated %#x outside %#x", step.dy, moved, vacated, outside)
+							// After a custom effect, resetting the default must reveal the
+							// original retained texture even with no new uploads.
+							for _, tc := range []struct {
+								body  string
+								pixel uintptr
+							}{
+								{"void main() { fragmentColor=vec4(1,0,1,1); }", 0xff00ff}, {"", 0x624c36},
+							} {
+								if err := w.SetFragmentShader(tc.body); err != nil || !w.PresentGPURegions(img.Rect.Size(), func(func(*image.RGBA)) {}) {
+									t.Errorf("present shader switch: %v", err)
+									return
+								}
+								syncX(b.eglXDisplay, 0)
+								read := getImage(b.display, w.id, 51, 61, 1, 1, ^uintptr(0), 2)
+								if read == nil {
+									t.Error("read switched shader")
+									return
+								}
+								pixel := getPixel(read, 0, 0) & 0xffffff
+								xl.destroyImage(read)
+								if pixel != tc.pixel {
+									t.Errorf("switched shader pixel %#x, want %#x", pixel, tc.pixel)
+									return
+								}
 							}
-							xl.destroyImage(actual)
-						}
-						checkGLScrollResize(t, w, img)
+							// Scrolling copies retained texture pixels; only the frame is swapped again.
+							for _, step := range []struct{ dy, from, to int32 }{{-7, 61, 54}, {7, 54, 61}} {
+								if !w.ScrollPixels(image.Rect(0, 10, 160, 90), image.Pt(0, int(step.dy))) ||
+									!w.PresentGPURegions(img.Rect.Size(), func(func(*image.RGBA)) {}) {
+									t.Error("OpenGL scroll copy rejected")
+									break
+								}
+								syncX(b.eglXDisplay, 0)
+								actual := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+								if actual == nil {
+									t.Error("OpenGL scroll readback failed")
+									break
+								}
+								moved, vacated, outside := getPixel(actual, 51, step.to)&0xffffff, getPixel(actual, 51, step.from)&0xffffff, getPixel(actual, 51, 5)&0xffffff
+								if moved != 0x624c36 || vacated != 0xc81e28 || outside != 0x00c800 {
+									t.Errorf("OpenGL scroll %d moved %#x vacated %#x outside %#x", step.dy, moved, vacated, outside)
+								}
+								xl.destroyImage(actual)
+							}
+							checkGLScrollResize(t, w, img)
+							// Exercise both roles of the full-size scroll textures. The newly
+							// exposed edge keeps its old pixels until the caller uploads it.
+							gradient := image.NewRGBA(img.Rect)
+							for y := range gradient.Rect.Dy() {
+								for x := range gradient.Rect.Dx() {
+									gradient.SetRGBA(x, y, color.RGBA{R: uint8(y), G: uint8(x), A: 255})
+								}
+							}
+							for _, dy := range []int{-9, 12} {
+								if !w.PresentGPURegions(img.Rect.Size(), func(upload func(*image.RGBA)) { upload(gradient) }) ||
+									!w.ScrollPixels(img.Rect, image.Pt(0, dy)) || !w.PresentGPURegions(img.Rect.Size(), func(func(*image.RGBA)) {}) {
+									t.Error("full-window scroll")
+									return
+								}
+								syncX(b.eglXDisplay, 0)
+								read := getImage(b.display, w.id, 0, 0, 160, 100, ^uintptr(0), 2)
+								if read == nil {
+									t.Error("read full-window scroll")
+									return
+								}
+								for y := 0; y < img.Rect.Dy(); y++ {
+									sourceY := y - dy
+									if sourceY < 0 || sourceY >= img.Rect.Dy() {
+										sourceY = y
+									}
+									if got := getPixel(read, 37, int32(y)) & 0xffffff; got != uintptr(sourceY<<16|37<<8) {
+										t.Errorf("scroll %d row %d pixel %#x", dy, y, got)
+										break
+									}
+								}
+								xl.destroyImage(read)
+							}
+						}()
 						w.SetGPUEnabled(false)
 					}
 				}
@@ -794,7 +853,32 @@ func checkGLScrollResize(t *testing.T, w *xWindow, img *image.RGBA) {
 	if size := scratchSize(); size != (image.Point{}) {
 		t.Errorf("OpenGL retained %v scroll texture after window shrink", size)
 	}
-	if !w.ScrollPixels(small, image.Pt(0, 4)) || scratchSize() != image.Pt(40, 21) {
+	if !w.ScrollPixels(small, image.Pt(0, 4)) || scratchSize() != small.Size() {
 		t.Error("OpenGL did not regrow its scroll texture")
+	}
+}
+
+func TestEGLBufferAgeRepairBounds(t *testing.T) {
+	var full, now, last, earlier eglDamage
+	full.add(image.Rect(0, 0, 800, 600))
+	now.add(image.Rect(2, 8, 9, 12))
+	last.add(image.Rect(230, 300, 250, 326))
+	earlier.add(image.Rect(510, 40, 535, 60))
+	c := eglContext{previous: [2]eglDamage{last, earlier}}
+	two := now
+	two.add(last.rects[0])
+	three := two
+	three.add(earlier.rects[0])
+	for age, want := range []eglDamage{full, now, two, three, full} {
+		if got := c.repairDamage(now, full, int32(age)); got != want {
+			t.Fatalf("age %d: repair %v, want %v", age, got, want)
+		}
+	}
+	c.previous[1] = eglDamage{}
+	if c.repairDamage(now, full, 3) != full {
+		t.Fatal("uninitialized back buffer")
+	}
+	if three.count != 3 {
+		t.Fatal("distant edits merged")
 	}
 }

@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/binary"
 	"image"
 	"image/color"
 	"math"
@@ -111,12 +112,23 @@ func blendPixel(d []byte, c Color) {
 		d[0], d[1], d[2], d[3] = c.R, c.G, c.B, 255
 		return
 	}
-	a := uint32(c.A)
-	inv := 255 - a
-	d[0] = uint8((uint32(c.R)*a + uint32(d[0])*inv + 127) / 255)
-	d[1] = uint8((uint32(c.G)*a + uint32(d[1])*inv + 127) / 255)
-	d[2] = uint8((uint32(c.B)*a + uint32(d[2])*inv + 127) / 255)
-	d[3] = uint8(a + (uint32(d[3])*inv+127)/255)
+	ink := uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16 | 0xff000000
+	blendPacked(d, spreadRGBA(ink), uint64(c.A))
+}
+
+// Separate channels into 16-bit lanes so the four integer blends share a
+// multiply. Each rounded numerator fits in its lane, including the correction.
+func spreadRGBA(pixel uint32) uint64 {
+	const pairs = 0x00ff00ff
+	return uint64(pixel&pairs) | uint64((pixel>>8)&pairs)<<32
+}
+
+func blendPacked(dst []byte, ink, alpha uint64) {
+	const lanes = 0x00ff00ff00ff00ff
+	base := spreadRGBA(binary.LittleEndian.Uint32(dst))
+	v := ink*alpha + base*(255-alpha) + 0x0080008000800080
+	v = ((v + ((v >> 8) & lanes)) >> 8) & lanes
+	binary.LittleEndian.PutUint32(dst, uint32(v)|uint32(v>>24))
 }
 func (p *Painter) Rect(r Rect, c Color) {
 	r.X += p.originX
@@ -140,9 +152,6 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 		return
 	}
 	aligned := x0 == float32(math.Trunc(float64(x0))) && x1 == float32(math.Trunc(float64(x1))) && y0 == float32(math.Trunc(float64(y0))) && y1 == float32(math.Trunc(float64(y1)))
-	// Straight-side rows (dy == 0) have identical edge coverage; reuse it.
-	var edge [64]int16
-	edgeReady := false
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		py := float32(y) + .5
 		dy := max(rad-(py-y0), rad-(y1-py), 0)
@@ -154,6 +163,12 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 				continue
 			}
 		}
+		// At fractional scales the straight sides still have identical coverage
+		// for every complete interior row. Paint each side as one vertical strip.
+		end := y + 1
+		if dy == 0 && float32(y) >= y0 {
+			end = max(end, min(b.Max.Y, int(math.Floor(float64(y1-max(rad, 1))))))
+		}
 		inset := float32(0)
 		if dy > 0 {
 			inset = rad - float32(math.Sqrt(float64(max(0, rad*rad-dy*dy))))
@@ -162,44 +177,26 @@ func (p *Painter) RoundRect(r Rect, radius float32, c Color) {
 		if lo < hi {
 			rowColor := c
 			rowColor.A = uint8(float32(c.A) * min(float32(1), max(float32(0), min(py-y0+.5, y1-py+.5))))
-			p.fillPixels(image.Rect(lo, y, hi, y+1), rowColor)
+			p.fillPixels(image.Rect(lo, y, hi, end), rowColor)
 		}
 		spans := [2][2]int{{b.Min.X, min(lo, b.Max.X)}, {max(hi, b.Min.X), b.Max.X}}
-		if dy == 0 && edgeReady {
-			i := 0
-			for _, span := range spans {
-				for x := span[0]; x < span[1]; x++ {
-					if a := edge[i]; a >= 0 {
-						cc := c
-						cc.A = uint8(a)
-						p.pixel(x, y, cc)
-					}
-					i++
-				}
-			}
-			continue
-		}
-		cache := dy == 0 && max(0, spans[0][1]-spans[0][0])+max(0, spans[1][1]-spans[1][0]) <= len(edge)
-		i := 0
 		for _, span := range spans {
 			for x := span[0]; x < span[1]; x++ {
 				px := float32(x) + .5
 				dx := max(x0+rad-px, px-(x1-rad), 0)
 				cov := min(float32(1), max(float32(0), rad+.5-float32(math.Sqrt(float64(dx*dx+dy*dy)))))
-				a := int16(-1)
 				if cov > 0 {
 					cc := c
 					cc.A = uint8(float32(c.A) * cov)
-					p.pixel(x, y, cc)
-					a = int16(cc.A)
-				}
-				if cache {
-					edge[i] = a
-					i++
+					if end == y+1 {
+						p.pixel(x, y, cc)
+					} else {
+						p.fillPixels(image.Rect(x, y, x+1, end), cc)
+					}
 				}
 			}
 		}
-		edgeReady = cache
+		y = end - 1
 	}
 }
 func (p *Painter) Circle(x, y, r float32, c Color) {
@@ -248,6 +245,8 @@ func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c
 	inner := max(0, radius-1)
 	inner2, outer2 := float32(inner*inner), float32(radius*radius)
 	p.solid = image.Rectangle{}
+	ink := uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16 | 0xff000000
+	lanes := spreadRGBA(ink)
 	for y := r.Min.Y; y < r.Max.Y; y++ {
 		py := float32(y) + .5
 		yProjection := float32((py - y1) * dy)
@@ -267,18 +266,20 @@ func (p *Painter) linePixels(r image.Rectangle, x1, y1, dx, dy, width float32, c
 			if !(distance < outer2) {
 				continue
 			}
-			shade := c
+			alpha := c.A
 			if distance >= inner2 {
 				coverage := radius - float32(math.Sqrt(float64(distance)))
 				if !(coverage > 0) {
 					continue
 				}
 				if coverage < 1 {
-					shade.A = uint8(float32(c.A) * coverage)
+					alpha = uint8(float32(c.A) * coverage)
 				}
 			}
-			if shade.A != 0 {
-				blendPixel(row[i:i+4:i+4], shade)
+			if alpha == 255 {
+				binary.LittleEndian.PutUint32(row[i:], ink)
+			} else if alpha != 0 {
+				blendPacked(row[i:], lanes, uint64(alpha))
 			}
 		}
 	}
@@ -330,9 +331,22 @@ func (p *Painter) Image(img image.Image, r Rect) {
 				copy(row, previous)
 			} else {
 				source := rgba.Pix[(sy-src.Min.Y)*rgba.Stride:]
-				for x := clip.Min.X; x < clip.Max.X; x++ {
-					sx := (x - dst.Min.X) * src.Dx() / dst.Dx()
-					copy(row[(x-clip.Min.X)*4:], source[sx*4:sx*4+4])
+				// Advance the nearest-neighbor sample with an integer remainder.
+				// Bands and clipped draws start at the same sample as a full repaint.
+				sw, dw := src.Dx(), dst.Dx()
+				start := (clip.Min.X - dst.Min.X) * sw
+				sx, rem := start/dw, start%dw
+				if sw == dw {
+					copy(row, source[4*sx:])
+				} else {
+					for i := 0; i+3 < len(row); i += 4 {
+						copy(row[i:i+4], source[4*sx:4*sx+4])
+						rem += sw
+						if rem >= dw {
+							rem -= dw
+							sx++
+						}
+					}
 				}
 				previousY = sy
 			}
@@ -384,13 +398,20 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		return
 	}
 	oldClip := p.clip
-	v.paintFocus(p, e)
+	r := e.rect
+	caption := e.captionControl()
+	var title Rect
+	if caption != nil {
+		r = floatingFrame(r)
+		title = v.floatingTitleBounds(p, caption, r)
+	}
+	v.paintFocus(p, e, r, title)
 	p.clip = p.clip.Intersect(e.clip.pixels(v.scale))
+	fieldClip := p.clip
 	defer func() { p.clip = oldClip }()
 	disabled = disabled || e.disabled
 	t := &v.theme
 	primary := t.Accent
-	r := e.rect
 	s := &e.style
 	font := v.font(e)
 	fg, bg := t.Text, Color{}
@@ -575,7 +596,6 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		}
 		inner := v.inputInner(e)
 		if e.kind == kEditor {
-			inner = v.inputInner(e)
 			p.Rect(Rect{r.X + 1, r.Y + 1, 48, r.H - 2}, t.Raised)
 			v.paintSource(p, e, inner, font, fg)
 			break
@@ -584,7 +604,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		text, password := e.text, e.password
 		ink := fg
 		if text == "" {
-			text = e.placeholder
+			text = e.emptyFieldText()
 			password = false
 			ink = t.Muted
 		}
@@ -673,12 +693,21 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		p.RoundRect(r, r.H/2, mix(backgroundUnder(t, e), t.Accent, .2))
 		p.RoundRect(Rect{r.X, r.Y, r.W * float32(e.value), r.H}, r.H/2, primary)
 	case kSelect:
-		p.frame(r, s.radius, border, fieldSurface(t, e))
-		str, ink := e.placeholder, t.Muted
-		if e.selected >= 0 && e.selected < len(e.options) {
-			str, ink = e.options[e.selected], fg
+		if e.floatingLabel == "" || caption != nil {
+			p.frame(r, s.radius, border, fieldSurface(t, e))
 		}
-		label(str, Rect{r.X + 12, r.Y, r.W - 36, r.H}, ink, false, false)
+		str, selected := e.selectLabel(e.selected)
+		ink := t.Muted
+		if selected {
+			ink = fg
+		}
+		box := selectTextBox(r)
+		saved := p.clip
+		if e.floatingLabel != "" {
+			p.clip = p.clip.Intersect(box.pixels(v.scale))
+		}
+		label(str, box, ink, false, false)
+		p.clip = saved
 		x, y := r.X+r.W-18, r.Y+r.H/2
 		p.Line(x-4, y-2, x, y+2, 1.5, t.Muted)
 		p.Line(x, y+2, x+4, y-2, 1.5, t.Muted)
@@ -706,6 +735,16 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			p.solid = image.Rectangle{}
 		}
 	}
+	if title.W > 0 {
+		p.clip = fieldClip
+		p.Rect(Rect{title.X - 4, r.Y, title.W + 8, 1}, fieldSurface(t, e))
+		p.clip = fieldClip.Intersect(title.pixels(v.scale))
+		ink := t.Muted
+		if disabled || caption.disabled {
+			ink = mix(ink, t.Surface, .45)
+		}
+		p.Label(caption.floatingLabel, title.X, title.Y, min(float32(12), v.font(caption)), ink, false)
+	}
 }
 
 const switchTrackWidth = 32
@@ -714,11 +753,10 @@ func switchTrack(r Rect) Rect {
 	return Rect{r.X, r.Y + r.H/2 - 9, switchTrackWidth, 18}
 }
 
-func (v *view) paintFocus(p *Painter, e *Element) {
+func (v *view) paintFocus(p *Painter, e *Element, r, title Rect) {
 	group := e.style.tone == groupSurface && v.focused != nil && v.focused.parent == e
 	if (v.focused == e || group) && v.focusVisible {
 		t := v.theme
-		r := e.rect
 		radius := e.style.radius
 		if e.kind == kSwitch {
 			r = switchTrack(r)
@@ -727,7 +765,28 @@ func (v *view) paintFocus(p *Painter, e *Element) {
 		if e.otpLength > 0 || e.parent != nil && (e.parent.style.tone == commandSurface || e.parent.style.tone == groupSurface) {
 			return
 		}
-		p.RoundRect(Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}, radius+3, RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128))
+		ring := Rect{r.X - 3, r.Y - 3, r.W + 6, r.H + 6}
+		ink := RGBA(t.Ring.R, t.Ring.G, t.Ring.B, 128)
+		if title.W > 0 {
+			// Leave the original parent surface visible in the notch above the frame.
+			gap := (Rect{title.X - 4, r.Y - 3, title.W + 8, 3}).pixels(v.scale).Intersect(p.clip)
+			if !gap.Empty() {
+				clip := p.clip
+				for _, part := range [...]image.Rectangle{
+					image.Rect(clip.Min.X, clip.Min.Y, gap.Min.X, clip.Max.Y),
+					image.Rect(gap.Max.X, clip.Min.Y, clip.Max.X, clip.Max.Y),
+					image.Rect(gap.Min.X, gap.Max.Y, gap.Max.X, clip.Max.Y),
+				} {
+					p.clip = part
+					if !part.Empty() {
+						p.RoundRect(ring, radius+3, ink)
+					}
+				}
+				p.clip = clip
+				return
+			}
+		}
+		p.RoundRect(ring, radius+3, ink)
 	}
 }
 

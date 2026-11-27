@@ -34,9 +34,10 @@ const (
 )
 
 type source struct {
-	font *sfnt.Font
-	file *os.File
-	name string
+	font  *sfnt.Font
+	file  *os.File
+	name  string
+	index int
 }
 
 type faceKey struct {
@@ -51,11 +52,11 @@ type glyphKey struct {
 }
 
 type glyph struct {
-	index      sfnt.GlyphIndex
-	advance    fixed.Int26_6
 	mask       *image.Alpha
-	bounds     image.Rectangle
+	advance    fixed.Int26_6
+	index      sfnt.GlyphIndex
 	rasterized bool
+	spriteSeen bool
 }
 
 type coverageKey struct {
@@ -70,9 +71,14 @@ type layoutKey struct {
 }
 
 type positioned struct {
-	source *source
-	r      rune
-	x, y   int64 // 1/64 pixel units; long documents must not overflow 26.6 positions.
+	font uint32 // index into the layout system's regular, CJK or symbol faces
+	r    rune
+	x, y int64 // 1/64 pixel units; long documents must not overflow 26.6 positions.
+}
+
+// Layout positions keep full 64-bit coordinates but no pointer per glyph.
+func (s *System) positionFonts() [5]*source {
+	return [5]*source{s.regular[0], s.regular[1], s.cjk[0], s.cjk[1], s.symbol}
 }
 
 type layout struct {
@@ -205,6 +211,62 @@ func (s *System) Measure(text string, size float32, bold bool) (w, h float32) {
 	return float32(l.w) / 64, float32(l.h) / 64
 }
 
+// EditBounds bounds changed ink in two short single-line values in device
+// pixels, including the advance to each possible caret position. Only reuse
+// known masks; expensive or complex edits can repaint their normal line box.
+func (s *System) EditBounds(before, after string, size float32, trimPrefix bool) (int, int, bool) {
+	if len(before) > 32 || len(after) > 32 {
+		return 0, 0, false
+	}
+	q := fontSize(size)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || q == 0 {
+		return 0, 0, false
+	}
+	first := 0
+	if trimPrefix {
+		// Only skip unchanged ASCII positions. Keep one neighboring glyph
+		// for kerning and allow its negative bearing in the damage bounds.
+		for first < min(len(before), len(after)) && before[first] < utf8.RuneSelf && before[first] == after[first] {
+			first++
+		}
+		first = max(0, first-1)
+	}
+	left, right := math.MaxInt, 0
+	for _, value := range [...]string{before, after} {
+		if value == "" {
+			continue
+		}
+		for _, r := range value {
+			// These scripts have no composing prefixes in this range. Other
+			// scripts can give a selected prefix different ink and advances.
+			if !(r >= ' ' && r <= '~' || r >= 0x4e00 && r <= 0x9fff) {
+				return 0, 0, false
+			}
+		}
+		l := s.layout(value, q, false, nil)
+		fonts := s.positionFonts()
+		for _, p := range l.glyphs[min(first, len(l.glyphs)):] {
+			g := s.glyph(glyphKey{fonts[p.font], q, p.r})
+			if !g.rasterized {
+				return 0, 0, false
+			}
+			x := int((p.x + 63) >> 6)
+			left = min(left, int(p.x>>6))
+			right = max(right, x+g.advance.Ceil())
+			if g.mask != nil {
+				left = min(left, int(p.x>>6)+g.mask.Rect.Min.X)
+				right = max(right, x+g.mask.Rect.Max.X)
+			}
+		}
+	}
+	if first == 0 || left == math.MaxInt {
+		left = 0
+	}
+	return left, right, true
+}
+
 // Hit returns a rune offset at the nearest grapheme boundary of a single line.
 // It advances once through the text instead of shaping every growing prefix.
 func (s *System) Hit(text string, size float32, bold bool, x float32) int {
@@ -303,6 +365,7 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 	s.setInk(ink)
 	solid = solid.Intersect(clip)
 	var drawn image.Rectangle
+	fonts := s.positionFonts()
 	for _, p := range l.glyphs {
 		gx := x + float32(p.x)/64
 		gy := y + float32(p.y)/64
@@ -310,7 +373,7 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 		if gx < viewport.left || gx > viewport.right || gy < viewport.top || gy > viewport.bottom {
 			continue
 		}
-		key := glyphKey{p.source, q, p.r}
+		key := glyphKey{fonts[p.font], q, p.r}
 		g := s.glyph(key)
 		if !g.rasterized {
 			s.rasterize(key, g)
@@ -318,7 +381,7 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 		if g.mask == nil {
 			continue
 		}
-		r := g.bounds.Add(image.Pt(int(math.Round(float64(gx))), int(math.Round(float64(gy)))))
+		r := g.mask.Rect.Add(image.Pt(int(math.Round(float64(gx))), int(math.Round(float64(gy)))))
 		visible := r.Intersect(clip)
 		if visible.Empty() {
 			continue
@@ -326,7 +389,7 @@ func (s *System) DrawOn(dst *image.RGBA, clip image.Rectangle, text string, x, y
 		if r.In(solid) && !r.Overlaps(drawn) {
 			s.copySprite(dst, r, g, under)
 		} else {
-			s.drawGlyph(dst, visible, g.mask, visible.Min.Sub(r.Min))
+			s.drawGlyph(dst, visible, g.mask, visible.Min.Sub(r.Min).Add(g.mask.Rect.Min))
 		}
 		drawn = drawn.Union(r)
 	}
@@ -405,13 +468,19 @@ func (s *System) copySprite(dst *image.RGBA, r image.Rectangle, g *glyph, under 
 	w, h := r.Dx(), r.Dy()
 	pix := s.sprites[key]
 	if pix == nil {
+		// One-off glyphs and masks larger than the cache need no RGBA copy.
+		if !g.spriteSeen || 4*w*h > maxSpriteBytes {
+			g.spriteSeen = true
+			s.drawGlyph(dst, r, g.mask, g.mask.Rect.Min)
+			return
+		}
 		pix = make([]byte, 4*w*h)
 		bg := [4]byte{under.R, under.G, under.B, under.A}
 		for i := 0; i < len(pix); i += 4 {
 			copy(pix[i:i+4], bg[:])
 		}
 		sprite := image.RGBA{Pix: pix, Stride: 4 * w, Rect: image.Rect(0, 0, w, h)}
-		s.drawGlyph(&sprite, sprite.Rect, g.mask, image.Point{})
+		s.drawGlyph(&sprite, sprite.Rect, g.mask, g.mask.Rect.Min)
 		if s.spriteBytes+len(pix) > maxSpriteBytes {
 			clear(s.sprites)
 			s.spriteBytes = 0
@@ -503,9 +572,8 @@ func (s *System) rasterize(key glyphKey, g *glyph) {
 		s.spriteBytes = 0
 		s.glyphs[key] = g
 	}
-	g.mask = image.NewAlpha(image.Rect(0, 0, r.Dx(), r.Dy()))
+	g.mask = image.NewAlpha(r)
 	draw.Draw(g.mask, g.mask.Bounds(), mask, at, draw.Src)
-	g.bounds = r
 	s.glyphBytes += len(g.mask.Pix)
 }
 
@@ -535,7 +603,10 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool, viewport *gl
 	if bold {
 		weight = 1
 	}
-	base := s.face(faceKey{s.latin(weight), size}).Metrics()
+	// Adjacent canvas cells and styled spans may be drawn in separate calls.
+	// Their alphabet and weight must not move the baseline or the next row.
+	base := s.face(faceKey{s.latin(0), size}).Metrics()
+	lineHeight := int64(max(base.Height, base.Ascent+base.Descent))
 	var l *layout
 	var cache bool
 	if numeric {
@@ -557,28 +628,15 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool, viewport *gl
 	// Oversized text still needs all metrics, but only visible glyphs need placement.
 	storeAll := numeric || cache
 	x, top := int64(0), int64(0)
-	ascent, descent := base.Ascent, base.Descent
-	lineStart := 0
 	var previous *source
+	var slot uint32
 	var prevIndex sfnt.GlyphIndex
-	// Glyphs from one source share face metrics; look them up once per change.
-	var metricsSource *source
-	var metrics font.Metrics
+	baseline := int64(base.Ascent)
 	finishLine := func() {
-		baseline := top + int64(ascent)
-		if !storeAll && viewport != nil {
-			gy := viewport.y + float32(baseline)/64
-			if gy < viewport.top || gy > viewport.bottom {
-				l.glyphs = l.glyphs[:lineStart]
-			}
-		}
-		for i := lineStart; i < len(l.glyphs); i++ {
-			l.glyphs[i].y = baseline
-		}
 		l.w = max(l.w, x)
-		top += int64(max(base.Height, ascent+descent))
-		x, lineStart = 0, len(l.glyphs)
-		ascent, descent = base.Ascent, base.Descent
+		top += lineHeight
+		baseline = top + int64(base.Ascent)
+		x = 0
 		previous = nil
 	}
 	for _, r := range normal {
@@ -600,18 +658,24 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool, viewport *gl
 		g := s.glyph(glyphKey{src, size, r})
 		if previous == src {
 			x += int64(s.kern(src, size, prevIndex, g.index))
+		} else {
+			switch src {
+			case s.regular[weight]:
+				slot = uint32(weight)
+			case s.cjk[weight]:
+				slot = uint32(2 + weight)
+			default:
+				slot = 4
+			}
 		}
-		if src != metricsSource {
-			metrics, metricsSource = s.face(faceKey{src, size}).Metrics(), src
-		}
-		ascent, descent = max(ascent, metrics.Ascent), max(descent, metrics.Descent)
 		keep := storeAll
 		if !keep && viewport != nil {
 			gx := viewport.x + float32(x)/64
-			keep = gx >= viewport.left && gx <= viewport.right
+			gy := viewport.y + float32(baseline)/64
+			keep = gx >= viewport.left && gx <= viewport.right && gy >= viewport.top && gy <= viewport.bottom
 		}
 		if keep {
-			l.glyphs = append(l.glyphs, positioned{source: src, r: r, x: x})
+			l.glyphs = append(l.glyphs, positioned{font: slot, r: r, x: x, y: baseline})
 		}
 		l.minX, l.maxX = min(l.minX, x), max(l.maxX, x)
 		x += int64(g.advance)
@@ -634,7 +698,7 @@ func (s *System) layout(text string, size fixed.Int26_6, bold bool, viewport *gl
 }
 
 func layoutSize(text string, glyphs int) int {
-	return len(text) + glyphs*32 + 96
+	return len(text) + glyphs*24 + 96
 }
 
 // Evict the oldest labels first. Reuse a victim's glyph storage when it fits
@@ -731,10 +795,10 @@ func (s *System) selectSourceSlow(r rune, bold bool) *source {
 	src := s.latin(weight)
 	if !s.contains(src, r) {
 		if !s.cjkLoaded[weight] {
-			s.cjk[weight] = s.openCandidates(fontCandidates("cjk", bold))
+			s.cjk[weight] = s.openCJK(bold)
 			if bold && s.cjk[weight] == nil {
 				if !s.cjkLoaded[0] {
-					s.cjk[0] = s.openCandidates(fontCandidates("cjk", false))
+					s.cjk[0] = s.openCJK(false)
 					s.cjkLoaded[0] = true
 				}
 				s.cjk[weight] = s.cjk[0]
@@ -773,8 +837,25 @@ type candidate struct {
 	index int
 }
 
+// iOS resolves installed font assets through Core Text, since their paths vary by OS.
+var systemCJK func(*System, bool) *source
+
+func (s *System) openCJK(bold bool) *source {
+	if systemCJK != nil {
+		if src := systemCJK(s, bold); src != nil {
+			return src
+		}
+	}
+	return s.openCandidates(fontCandidates("cjk", bold))
+}
+
 func (s *System) openCandidates(candidates []candidate) *source {
 	for _, c := range candidates {
+		for _, src := range s.sources {
+			if src.name == c.path && src.index == c.index {
+				return src
+			}
+		}
 		f, err := os.Open(c.path)
 		if err != nil {
 			continue
@@ -789,7 +870,7 @@ func (s *System) openCandidates(candidates []candidate) *source {
 			f.Close()
 			continue
 		}
-		src := &source{font: parsed, file: f, name: c.path}
+		src := &source{font: parsed, file: f, name: c.path, index: c.index}
 		s.sources = append(s.sources, src)
 		return src
 	}
@@ -829,7 +910,15 @@ func fontCandidates(kind string, bold bool) []candidate {
 		case "latin":
 			return []candidate{{"/system/fonts/Roboto-Regular.ttf", 0}, {"/system/fonts/RobotoStatic-Regular.ttf", 0}}
 		case "cjk":
-			return []candidate{{"/system/fonts/NotoSansCJK-Regular.ttc", 2}}
+			// Some Android images ship a variable CFF2 sans face which
+			// sfnt cannot open, alongside a static, fully usable serif face.
+			return []candidate{
+				{"/system/fonts/NotoSansCJK-" + suffix + ".ttc", 2},
+				{"/system/fonts/NotoSansSC-" + suffix + ".otf", 0},
+				{"/system/fonts/NotoSansSC-" + suffix + ".ttf", 0},
+				{"/system/fonts/DroidSansFallback.ttf", 0},
+				{"/system/fonts/NotoSerifCJK-" + suffix + ".ttc", 2},
+			}
 		case "symbols":
 			return []candidate{{"/system/fonts/NotoSansSymbols-Regular.ttf", 0}}
 		}

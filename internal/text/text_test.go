@@ -10,6 +10,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -127,19 +128,25 @@ func TestChineseSystemFallback(t *testing.T) {
 	s := testSystem(t)
 	src := s.selectSource('中', false)
 	if !s.contains(src, '中') {
+		if runtime.GOOS == "android" || runtime.GOOS == "ios" {
+			t.Fatal("installed mobile fonts did not resolve Chinese")
+		}
 		t.Skip("host has no supported system CJK font; portable fallback still tested")
 	}
 	if src.file == nil {
 		t.Fatal("Chinese should resolve to a real system font")
 	}
-	for _, r := range "中文控件" {
-		g := s.glyph(glyphKey{src, fontSize(18), r})
-		if g.index == 0 {
-			t.Fatalf("%s is missing %c", src.name, r)
-		}
-		s.rasterize(glyphKey{src, fontSize(18), r}, g)
-		if g.mask == nil || len(g.mask.Pix) == 0 {
-			t.Fatalf("%c produced no glyph mask", r)
+	for _, bold := range []bool{false, true} {
+		for _, r := range "中文控件簡體測試" {
+			key := glyphKey{s.selectSource(r, bold), fontSize(18), r}
+			g := s.glyph(key)
+			if g.index == 0 {
+				t.Fatalf("%s is missing %c (bold=%v)", key.source.name, r, bold)
+			}
+			s.rasterize(key, g)
+			if g.mask == nil || len(g.mask.Pix) == 0 {
+				t.Fatalf("%c produced no glyph mask", r)
+			}
 		}
 	}
 	t.Logf("CJK font: %s", src.name)
@@ -306,8 +313,8 @@ func TestConcurrentAndClose(t *testing.T) {
 		t.Fatal("closed system retained font or scratch data")
 	}
 	for _, glyph := range s.numericGlyphs {
-		if glyph.source != nil {
-			t.Fatal("closed numeric layout retained a font")
+		if glyph != (positioned{}) {
+			t.Fatal("closed numeric layout retained glyph data")
 		}
 	}
 }
@@ -445,6 +452,56 @@ func TestGlyphBlendMatchesDrawMask(t *testing.T) {
 		s.drawGlyph(got, r, mask, mp)
 		if !bytes.Equal(got.Pix, want.Pix) {
 			t.Fatalf("ink %v mask %v r %v mp %v differs", ink, mask.Rect, r, mp)
+		}
+	}
+}
+
+func TestSpritesAdmitRepeatedGlyphsWithinBudget(t *testing.T) {
+	s := testSystem(t)
+	dst := image.NewRGBA(image.Rect(0, 0, 820, 630))
+	ink, paper := color.RGBA{A: 255}, color.RGBA{255, 255, 255, 255}
+	paint := func(size float32) {
+		draw.Draw(dst, dst.Rect, image.NewUniform(paper), image.Point{}, draw.Src)
+		s.DrawOn(dst, dst.Rect, "W", 0, 0, size, ink, false, dst.Rect, paper)
+	}
+	paint(16)
+	if s.spriteBytes != 0 {
+		t.Fatal("one-off glyph allocated an RGBA sprite")
+	}
+	before := bytes.Clone(dst.Pix)
+	paint(16)
+	if s.spriteBytes == 0 || !bytes.Equal(before, dst.Pix) {
+		t.Fatal("cached glyph differs from direct rendering")
+	}
+	used := s.spriteBytes
+	paint(500)
+	copy(before, dst.Pix)
+	paint(500)
+	if s.spriteBytes != used || !bytes.Equal(before, dst.Pix) {
+		t.Fatal("oversized glyph evicted small cached sprites or changed pixels")
+	}
+}
+
+func TestAdjacentLabelsShareBaselineAndLineStep(t *testing.T) {
+	for _, s := range []*System{New(), NewMonospace()} {
+		t.Cleanup(func() { s.Close() })
+		for _, size := range []float32{11 * 96.0 / 72, 18.333, 22, 29.333} {
+			q := fontSize(size)
+			reference := s.layout("H", q, false, nil)
+			base, step := reference.glyphs[0].y, reference.h
+			for _, bold := range []bool{false, true} {
+				for _, run := range []string{"获", "取", "1", ":", "https", "获取:1", "驗證", "Åg"} {
+					label := s.layout(run, q, bold, nil)
+					if label.h != step || label.glyphs[0].y != base {
+						t.Fatalf("%q at %v bold=%v baseline/height=%d/%d, want %d/%d",
+							run, size, bold, label.glyphs[0].y, label.h, base, step)
+					}
+				}
+				lines := s.layout("H\n获取\n5", q, bold, nil)
+				if lines.h != 3*step || lines.glyphs[1].y != base+step || lines.glyphs[3].y != base+2*step {
+					t.Fatal("fallback text changed the multiline grid")
+				}
+			}
 		}
 	}
 }

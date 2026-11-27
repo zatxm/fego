@@ -131,6 +131,17 @@ Use `Sheet` with `Document.ShowSheet` for a right-side panel. Use `Drawer` with 
 
 Use `ui.PaginationWithTotal(page, pages, total, onChange)` to show the page and record counts. Click the current page in the readout, type a page number, and press Enter to jump.
 
+### Floating field labels
+
+Use `FloatingLabel` to keep a title inside an empty field and move it into the top outline when the field has a value. Clearing the value moves it back inside, including while the field has focus. The title also names the control for assistive technology.
+
+```go
+name := ui.TextInput("").FloatingLabel("Name")
+region := ui.Select([]string{"Shanghai", "Tokyo"}, -1).FloatingLabel("Region")
+```
+
+Text areas, password fields, number and date inputs, and editable combo boxes support the same option. Use `FloatingLabel("")` to restore the original appearance and placeholder. For a permanent label above the control, use `ui.Field`.
+
 ## Updating state and layout
 
 Create the widget tree once, then update existing widgets with methods such as `SetText`, `SetValue`, and `SetSelected`. Each widget belongs to one parent or window. Calling a setter does not invoke user interaction callbacks.

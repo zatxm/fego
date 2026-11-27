@@ -92,7 +92,7 @@ type regionHost interface {
 
 // Bound region scratch memory; full repaints are painted and uploaded in bands.
 // The size matches one X11 upload request; smaller bands repeat more paint work.
-const regionBandBytes = 512<<10 - 64
+const regionBandBytes = 384<<10 - 64
 
 // A band above this size is kept only while frames keep needing it: a frame
 // that paints only small regions or a pause without frames releases it.
@@ -287,6 +287,9 @@ func (v *view) frame(force bool) {
 		v.scrolling = nil
 		v.dirty = append(v.dirty[:0], v.size)
 	}
+	if v.accessDirty {
+		v.updateCaret()
+	}
 	if len(v.dirty) == 0 {
 		v.flushAccessibility()
 		if force {
@@ -295,9 +298,6 @@ func (v *view) frame(force bool) {
 		return
 	}
 	v.frames++
-	if v.accessDirty {
-		v.updateCaret()
-	}
 	scroll := v.scrolling
 	v.scrolling = nil
 	if scroll != nil {
@@ -351,7 +351,6 @@ func (v *view) frame(force bool) {
 func (v *view) flushAccessibility() {
 	if v.accessDirty {
 		v.accessDirty = false
-		v.updateCaret()
 		v.updateAccessibility()
 	}
 }
@@ -360,6 +359,10 @@ func (v *view) paintBands(upload func(*image.RGBA)) {
 	v.bandMu.Lock()
 	for _, d := range v.dirty {
 		rows := max(1, regionBandBytes/(4*d.Dx()))
+		// Balance the last band across the same number of uploads. The largest
+		// batch then needs less scratch memory without another paint traversal.
+		count := (d.Dy() + rows - 1) / rows
+		rows = (d.Dy() + count - 1) / count
 		for y := d.Min.Y; y < d.Max.Y; y += rows {
 			band := v.scratch(image.Rect(d.Min.X, y, d.Max.X, min(y+rows, d.Max.Y)))
 			v.paintRegion(band, band.Rect)
@@ -368,7 +371,7 @@ func (v *view) paintBands(upload func(*image.RGBA)) {
 	}
 	if cap(v.bandMem) > smallBandBytes {
 		// Two smaller frames distinguish sustained interaction from a single partial repaint.
-		oversized := v.bandNeed <= cap(v.bandMem)/2
+		oversized := v.bandNeed <= cap(v.bandMem)*2/3
 		if v.bandNeed <= smallBandBytes || (oversized && v.bandOversized) {
 			v.releaseBand()
 		} else if v.bandTimer == nil {

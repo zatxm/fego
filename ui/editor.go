@@ -504,6 +504,7 @@ func (v *view) editCarets(e *Element, text, key string) bool {
 	}
 	var out strings.Builder
 	out.Grow(bytes)
+	previousText := e.text
 	state.extra = state.extra[:0]
 	prev, delta := 0, 0
 	for i, s := range normal {
@@ -525,7 +526,7 @@ func (v *view) editCarets(e *Element, text, key string) bool {
 	e.text = out.String()
 	e.markEditorEdit()
 	state.folds = state.folds[:0]
-	v.edited(e)
+	v.edited(e, previousText)
 	return true
 }
 

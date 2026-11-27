@@ -27,6 +27,6 @@ xcrun simctl launch booted org.fego.demo
 scripts/build-mobile.sh ios-framework ./examples/mobile FegoMobile.framework
 ```
 
-To embed the framework, link it into a UIKit host with UIKit, QuartzCore, CoreGraphics, Foundation, CoreFoundation, Security and libresolv. On the main thread, attach the controller returned by `FegoMobileViewController()` to the app window.
+To embed the framework, link it into a UIKit host with UIKit, CoreText, QuartzCore, CoreGraphics, Foundation, CoreFoundation, Security and libresolv. On the main thread, attach the controller returned by `FegoMobileViewController()` to the app window.
 
 For a signed device app, set `FEGO_APP_ID`, `IOS_PROFILE`, `IOS_IDENTITY` and `IOS_ENTITLEMENTS` to matching provisioning and signing values. Then run `scripts/build-mobile.sh ios ./examples/mobile Fego.ipa`. [Xcode](https://developer.apple.com/xcode/)

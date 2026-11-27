@@ -80,6 +80,9 @@ type eglContext struct {
 	b                         *xBackend
 	display, surface, context uintptr
 	swapDamage                uintptr
+	age                       int32
+	previous                  [2]eglDamage
+	queryAge                  uintptr
 	args                      [4]uintptr
 }
 
@@ -240,7 +243,7 @@ func (b *xBackend) closeEGL() {
 }
 func (w *xWindow) PresentGPURegions(size image.Point, paint func(func(*image.RGBA))) bool {
 	if w.render.dst != 0 {
-		paint(w.PresentRegion)
+		w.PresentRegions(paint)
 		return true
 	}
 	if w.restoring {
@@ -315,8 +318,98 @@ func (w *xWindow) newGPUContext() (glContext, error) {
 		c.Close()
 		return nil, errors.New("activate EGL window context")
 	}
+	if strings.Contains(extensions, " EGL_EXT_buffer_age ") {
+		c.queryAge = c.Proc("eglQuerySurface")
+	}
 	egl.swapInterval(display, 0)
 	return c, nil
+}
+
+// A back buffer aged N last held the frame from N swaps ago. Repair its
+// intervening changes before swapping it, even if today's edit is elsewhere.
+func (c *eglContext) drawBackBuffer(p *glPresenter) bool {
+	if p.custom || p.gl.blitFramebuffer == 0 || p.copyFailed {
+		c.previous = [2]eglDamage{}
+		if p.program == 0 && p.shader("") != nil {
+			return false
+		}
+		p.gl.drawArrays(4, 0, 3)
+		return p.gl.getError() == 0
+	}
+	full := image.Rectangle{Max: p.size}
+	whole := eglDamage{rects: [4]image.Rectangle{full}, count: 1}
+	changed := whole
+	if !p.fullDamage && len(p.damage) > 0 {
+		changed = eglDamage{}
+		for _, r := range p.damage {
+			changed.add(r)
+		}
+	}
+	repair := whole
+	if c.queryAge != 0 && changed != whole {
+		c.args = [4]uintptr{c.display, c.surface, 0x313d, uintptr(unsafe.Pointer(&c.age))}
+		if ok, _, _ := purego.SyscallN(c.queryAge, c.args[:]...); ok != 0 {
+			repair = c.repairDamage(changed, whole, c.age)
+		}
+	}
+	c.previous[1], c.previous[0] = c.previous[0], changed
+	const read = 0x8ca8 // GL_READ_FRAMEBUFFER
+	if p.framebuffers[0] == 0 {
+		p.gl.genFramebuffers(2, &p.framebuffers[0])
+		p.bindFramebuffer(read, p.framebuffers[0])
+		p.gl.framebufferTexture(read, 0x8ce0, 0x0de1, p.texture, 0)
+	} else {
+		p.bindFramebuffer(read, p.framebuffers[0])
+	}
+	// Texture row zero is the top of a Fego window. Reverse the destination
+	// endpoints to copy the same pixels the default fragment shader sampled.
+	for _, r := range repair.rects[:repair.count] {
+		dst := image.Rectangle{Min: image.Pt(r.Min.X, p.size.Y-r.Min.Y), Max: image.Pt(r.Max.X, p.size.Y-r.Max.Y)}
+		p.blit(r, dst)
+	}
+	return p.gl.getError() == 0
+}
+
+// Keep distant edits independent, with a fixed upper bound on driver calls.
+type eglDamage struct {
+	rects [4]image.Rectangle
+	count int
+}
+
+func (d *eglDamage) add(r image.Rectangle) {
+	if r.Empty() {
+		return
+	}
+	nearest, cost := 0, int64(1<<62)
+	for i, old := range d.rects[:d.count] {
+		joined := old.Union(r)
+		extra := int64(joined.Dx())*int64(joined.Dy()) - int64(old.Dx())*int64(old.Dy())
+		if extra < cost {
+			nearest, cost = i, extra
+		}
+	}
+	// Nearby edits and adjacent upload bands are cheaper as one copy.
+	if d.count > 0 && (d.count == len(d.rects) || cost <= int64(r.Dx())*int64(r.Dy())+4096) {
+		d.rects[nearest] = d.rects[nearest].Union(r)
+		return
+	}
+	d.rects[d.count] = r
+	d.count++
+}
+
+func (c *eglContext) repairDamage(changed, full eglDamage, age int32) eglDamage {
+	if age < 1 || age > int32(len(c.previous))+1 {
+		return full
+	}
+	for _, prev := range c.previous[:age-1] {
+		if prev.count == 0 || prev == full {
+			return full
+		}
+		for _, r := range prev.rects[:prev.count] {
+			changed.add(r)
+		}
+	}
+	return changed
 }
 
 func (c *eglContext) MakeCurrent() bool {

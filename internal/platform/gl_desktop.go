@@ -43,7 +43,7 @@ type glAPI struct {
 	bindTexture      func(uint32, uint32)
 	textureParameter func(uint32, uint32, int32)
 	textureImage     func(uint32, int32, int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
-	textureSubImage  func(uint32, int32, int32, int32, int32, int32, uint32, uint32, unsafe.Pointer)
+	textureSubImage  uintptr
 	pixelStore       func(uint32, int32)
 	drawArrays       func(uint32, int32, int32)
 	// Optional: retained-texture scrolling falls back to repainting without them.
@@ -85,7 +85,6 @@ func loadGL(ctx glContext) (glAPI, error) {
 		{"glBindTexture", &g.bindTexture},
 		{"glTexParameteri", &g.textureParameter},
 		{"glTexImage2D", &g.textureImage},
-		{"glTexSubImage2D", &g.textureSubImage},
 		{"glPixelStorei", &g.pixelStore},
 		{"glDrawArrays", &g.drawArrays},
 	} {
@@ -94,6 +93,10 @@ func loadGL(ctx glContext) (glAPI, error) {
 			return glAPI{}, fmt.Errorf("OpenGL entry point %s unavailable", entry.name)
 		}
 		purego.RegisterFunc(entry.fn, address)
+	}
+	g.textureSubImage = ctx.Proc("glTexSubImage2D")
+	if g.textureSubImage == 0 {
+		return glAPI{}, fmt.Errorf("OpenGL entry point glTexSubImage2D unavailable")
 	}
 	// Only X11 uses retained-texture scrolling. Other backends repaint on scroll.
 	if runtime.GOOS != "linux" {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/draw"
+	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -850,5 +851,75 @@ func TestRegionBandReleasedAfterLargeFrames(t *testing.T) {
 	h.Close()
 	if v.bandMem != nil {
 		t.Fatal("closed view kept its band")
+	}
+}
+
+func TestChartUpdatesMatchFullRepaint(t *testing.T) {
+	for _, makeChart := range []func(...Series) *Chart{LineChart, BarChart, AreaChart, StackedBarChart} {
+		for _, scale := range []float32{.75, 1, 1.25, 2} {
+			c := makeChart(Series{Name: "First", Values: []float64{3, -1, 2, 5}})
+			h := newScrollScreen(View(Column(c.Element.Fill()).Padding(9)), scale, true)
+			for i, s := range []Series{
+				{Name: "First", Values: []float64{9, math.NaN(), -4, 8}},
+				{Name: "Second", Color: RGB(81, 22, 89), Values: []float64{-4, 2, 9, 0}},
+				{Name: "Second"}, {Name: "Second", Values: []float64{1, 3, 2}},
+			} {
+				h.uploaded = 0
+				c.SetSeries(s)
+				h.Step()
+				if i == 0 && (h.uploaded == 0 || h.uploaded >= c.rect.pixels(scale).Dx()*c.rect.pixels(scale).Dy()) {
+					t.Fatalf("unchanged chart chrome repainted at scale %v: %d pixels", scale, h.uploaded)
+				}
+				checkScrollPixels(t, h)
+			}
+			c.selectSample(1)
+			c.SetSeries(Series{Name: "Second", Values: []float64{-30, 20, 15}})
+			h.Step()
+			checkScrollPixels(t, h)
+			h.Close()
+		}
+	}
+}
+
+func TestUnfocusedInputSuffixDamageMatchesFullRepaint(t *testing.T) {
+	for _, scale := range []float32{.75, 1, 1.25, 2} {
+		field := TextInput("Workspace 1231").Width(280).FloatingLabel("工作区")
+		h := newScrollScreen(View(Column(field).Padding(13)), scale, true)
+		v := h.Document.live
+		inner := v.inputInner(field).pixels(scale)
+		field.SetText("Workspace 1232")
+		if len(v.dirty) != 1 || v.dirty[0].Min.X <= inner.Min.X {
+			t.Fatalf("unchanged prefix included at scale %v: %v", scale, v.dirty)
+		}
+		h.Step()
+		checkScrollPixels(t, h)
+		for _, text := range []string{"Workspace 12j", "Workspace 12中文", "", "Workspace", "Workspace 1"} {
+			field.SetText(text)
+			h.Step()
+			checkScrollPixels(t, h)
+		}
+		h.Key("Tab", false, false)
+		field.SetText("Workspace 2")
+		h.Step()
+		checkScrollPixels(t, h)
+		h.Close()
+	}
+}
+
+func TestFloatingSelectDamagesShortValues(t *testing.T) {
+	field := Select([]string{"AB", "BA"}, 0).Width(390).FloatingLabel("Title")
+	h := newScrollScreen(View(Column(field).Padding(12)), 1.25, true)
+	defer h.Close()
+	for _, i := range []int{1, -1, 0, 1} {
+		field.SetSelected(i)
+		h.Step()
+		if i == 1 {
+			for _, r := range h.Damage() {
+				if r.Dx() >= 100 {
+					t.Fatalf("short selection repainted %v", r)
+				}
+			}
+		}
+		checkScrollPixels(t, h)
 	}
 }

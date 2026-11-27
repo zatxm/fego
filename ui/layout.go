@@ -107,6 +107,10 @@ func (v *view) measure(e *Element) (w, h float32) {
 	case kCanvas:
 		w, h = 100, 100
 	}
+	if e.captionControl() != nil {
+		// Leave room between the small caption and the editable text.
+		h = max(h, 42) + floatingLabelInset
+	}
 	w += s.padding[1] + s.padding[3]
 	h += s.padding[0] + s.padding[2]
 	if e.scrollable {
@@ -131,6 +135,9 @@ func (v *view) measure(e *Element) (w, h float32) {
 
 func (e *Element) innerRect() Rect {
 	r, padding := e.rect, e.style.padding
+	if e.style.tone == groupSurface && e.captionControl() != nil {
+		r = floatingFrame(r)
+	}
 	return Rect{r.X + padding[3], r.Y + padding[0], max(0, r.W-padding[1]-padding[3]), max(0, r.H-padding[0]-padding[2])}
 }
 
@@ -294,7 +301,7 @@ func (v *view) moveLayout(e *Element, y float32, clip Rect) {
 		return
 	}
 	s := &e.style
-	inner := Rect{e.rect.X + s.padding[3], y + s.padding[0], max(0, e.rect.W-s.padding[1]-s.padding[3]), max(0, e.rect.H-s.padding[0]-s.padding[2])}
+	inner := e.innerRect()
 	if s.clip {
 		clip = clip.intersect(e.rect)
 	}
@@ -374,7 +381,11 @@ func (e *Element) maxScroll() float32 {
 		} else {
 			lines = strings.Count(e.text, "\n") + 1
 		}
-		return max(0, float32(lines)*lineH-e.rect.H+20)
+		height := e.rect.H
+		if e.floatingLabel != "" && e.captionControl() != nil {
+			height = floatingFrame(e.rect).H
+		}
+		return max(0, float32(lines)*lineH-height+20)
 	}
 	return max(0, float32(e.rowCount())*e.rowHeight()-e.rect.H+e.headerHeight())
 }

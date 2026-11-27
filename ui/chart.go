@@ -124,6 +124,9 @@ func finiteValue(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 func (c *Chart) SetSeries(series ...Series) *Chart {
 	previous := c.series
+	oldCount, oldData := c.count, c.hasData
+	plotOnly := c.view != nil && !c.view.needsLayout && c.plot.W > 0 && c.plot.H > 0 &&
+		c.selectedIndex < 0 && c.hoveredIndex < 0 && len(series) == len(previous)
 	if cap(c.series) < len(series) || len(series) < cap(c.series)/4 {
 		c.series = make([]Series, len(series))
 	} else {
@@ -132,6 +135,9 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 	c.version++
 	c.low, c.high, c.count, c.hasData = math.Inf(1), math.Inf(-1), 0, false
 	for i, s := range series {
+		if plotOnly && (previous[i].Name != s.Name || previous[i].Color != s.Color) {
+			plotOnly = false
+		}
 		var values []float64
 		if i < len(previous) && len(s.Values) >= cap(previous[i].Values)/4 {
 			values = previous[i].Values[:0]
@@ -192,7 +198,22 @@ func (c *Chart) SetSeries(series ...Series) *Chart {
 		c.low = max(-math.MaxFloat64, c.low-padding)
 		c.high = min(math.MaxFloat64, c.high+padding)
 	}
-	c.Element.touch(false)
+	if v := c.view; v != nil {
+		if plotOnly && oldCount == c.count && oldData && c.hasData {
+			// Legend, tick labels, border and shadow are unchanged. Include
+			// isolated-point radii and antialiased strokes outside the plot.
+			plot := c.plot
+			plot.X += c.rect.X - 3
+			plot.Y += c.rect.Y - 3
+			plot.W += 6
+			plot.H += 6
+			v.scrolling = nil
+			v.damage(plot.intersect(c.clip).pixels(v.scale))
+			v.host.Invalidate()
+		} else {
+			v.repaint(c.Element, false)
+		}
+	}
 	return c
 }
 

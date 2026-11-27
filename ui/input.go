@@ -64,6 +64,11 @@ func hit(e *Element, x, y float32) *Element {
 			return c
 		}
 	}
+	if e.style.tone == groupSurface {
+		if c := e.captionControl(); c != nil && !c.disabled && y < floatingFrame(e.rect).Y {
+			return c
+		}
+	}
 	if e.interactive() && e.rect.contains(x, y) {
 		return e
 	}
@@ -782,6 +787,9 @@ func inputDisplayLine(text string, password bool) string {
 
 func (v *view) inputInner(e *Element) Rect {
 	r := e.rect
+	if e.floatingLabel != "" && e.captionControl() != nil {
+		r = floatingFrame(r)
+	}
 	inner := Rect{r.X + 12, r.Y + 10, r.W - 24, r.H - 20}
 	if e.pagination == pageEntry {
 		inner.X, inner.W = r.X+7, max(0, r.W-14)
@@ -973,12 +981,13 @@ func (v *view) replaceSelection(e *Element, text string) {
 	if state != nil {
 		state.splice(e.text, a, b, start, end, text, newRunes)
 	}
+	previousText := e.text
 	e.text = e.text[:start] + text + e.text[end:]
 	e.own().cursor = a + utf8.RuneCountInString(text)
 	e.own().anchor = e.cursor
-	v.edited(e)
+	v.edited(e, previousText)
 }
-func (v *view) edited(e *Element) {
+func (v *view) edited(e *Element, previousText string) {
 	e.scroll = min(e.scroll, e.maxScroll())
 	if e.multiline {
 		inner := v.inputInner(e)
@@ -990,7 +999,7 @@ func (v *view) edited(e *Element) {
 			e.scroll = min(e.maxScroll(), e.scroll+y+lineH-inner.Y-inner.H)
 		}
 	}
-	e.touchInputText()
+	e.touchInputText(previousText, false)
 	v.updateCaret()
 	if e.onChange != nil {
 		e.onChange(e.text)
@@ -1048,6 +1057,7 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 		case "z":
 			if len(e.undo) > 0 {
 				last := e.undo[len(e.undo)-1]
+				previousText := e.text
 				e.text = e.text[:last.start] + last.removed + e.text[last.start+last.inserted:]
 				e.markEditorEdit()
 				if e.editor != nil {
@@ -1058,7 +1068,7 @@ func (v *view) editKey(e *Element, ev fego.Event) {
 				e.own().undo = e.undo[:len(e.undo)-1]
 				e.own().cursor = utf8.RuneCountInString(e.text)
 				e.own().anchor = e.cursor
-				v.edited(e)
+				v.edited(e, previousText)
 			}
 			return
 		}

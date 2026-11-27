@@ -131,6 +131,17 @@ python3 -m http.server 8080 --directory /tmp/fego-web
 
 使用 `ui.PaginationWithTotal(page, pages, total, onChange)` 显示页码和总记录数。点击读数中的当前页，输入页码后按回车即可跳转。
 
+### 浮动标题
+
+使用 `FloatingLabel` 后，空值时标题显示在框内，有值时标题缩小并移到左上边框。清空后标题回到框内，即使控件仍有焦点。屏幕阅读器也会使用这个标题。
+
+```go
+name := ui.TextInput("").FloatingLabel("名称")
+region := ui.Select([]string{"上海", "东京"}, -1).FloatingLabel("地区")
+```
+
+多行文本、密码、数字、日期输入和可编辑组合框也支持这个选项。传入 `FloatingLabel("")` 会恢复原有外观和占位符。需要固定在控件上方的标题时，使用 `ui.Field`。
+
 ## 更新状态与布局
 
 创建控件树后，使用 `SetText`、`SetValue`、`SetSelected` 等方法更新已有控件。一个控件只能放入一个父节点或窗口；程序调用 setter 不会触发用户交互回调。

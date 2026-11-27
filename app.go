@@ -268,6 +268,7 @@ type Window struct {
 	width, height          int
 	scale                  float32
 	closed, invalid, ready bool
+	paintPending           func()
 	onReady                []func()
 	onClose                func(*CloseEvent)
 	done                   chan struct{}
@@ -414,7 +415,10 @@ func (w *Window) PresentRegions(paint func(func(*image.RGBA))) {
 		}
 		return
 	}
-	if native, ok := w.native.(platform.RegionPresenter); ok {
+	if native, ok := w.native.(interface{ PresentRegions(func(func(*image.RGBA))) }); ok {
+		native.PresentRegions(paint)
+		w.presented()
+	} else if native, ok := w.native.(platform.RegionPresenter); ok {
 		paint(native.PresentRegion)
 		w.presented()
 	}
@@ -455,16 +459,20 @@ func (w *Window) Invalidate() {
 		return
 	}
 	w.invalid = true
-	w.app.Post(func() {
-		w.invalid = false
-		if !w.closed {
+	if w.paintPending == nil {
+		w.paintPending = func() {
+			w.invalid = false
+			if w.closed {
+				return
+			}
 			if view, ok := w.view.(interface{ PaintIfDirty() }); ok {
 				view.PaintIfDirty()
 			} else {
 				w.view.Event(Event{Kind: Paint})
 			}
 		}
-	})
+	}
+	w.app.Post(w.paintPending)
 }
 
 // After runs fn on the UI thread once d has elapsed, unless the window has

@@ -156,7 +156,7 @@ type Element struct {
 // widget holds state used by controls but not by plain boxes and labels.
 type widget struct {
 	editor                                    *editorState
-	placeholder                               string
+	placeholder, floatingLabel                string
 	checked, multiline, password, currentPage bool
 	pagination                                pageControl
 	value, minimum, maximum                   float64
@@ -164,31 +164,40 @@ type widget struct {
 	options                                   []string
 	count                                     int
 	rowText                                   func(int) string
-	columns                                   []ColumnDef
-	rows                                      [][]string
-	order                                     []int
-	tree                                      []*TreeNode
-	visibleTree                               []treeRow
-	expanded                                  map[*TreeNode]bool
-	spans                                     []Span
-	bitmap                                    image.Image
-	draw                                      func(*Painter)
-	onPoint                                   func(float32, float32)
-	onHover                                   func(float32, float32)
-	onNavigate                                func(string)
-	onChange                                  func(string)
-	onToggle                                  func(bool)
-	onValue                                   func(float64)
-	onSelect                                  func(int)
-	onLink                                    func(string)
-	scrollX                                   float32
-	cursor, anchor                            int
-	undo                                      []textUndo
-	undoBytes                                 int
-	virtual                                   *VirtualListView
-	interval                                  *RangeSliderView
-	submit                                    func()
-	otpLength                                 int
+	*tableState
+	*treeState
+	spans          []Span
+	bitmap         image.Image
+	draw           func(*Painter)
+	onPoint        func(float32, float32)
+	onHover        func(float32, float32)
+	onNavigate     func(string)
+	onChange       func(string)
+	onToggle       func(bool)
+	onValue        func(float64)
+	onSelect       func(int)
+	onLink         func(string)
+	scrollX        float32
+	cursor, anchor int
+	undo           []textUndo
+	undoBytes      int
+	virtual        *VirtualListView
+	interval       *RangeSliderView
+	submit         func()
+	otpLength      int
+}
+
+// Only tables and trees retain row storage and ordering state.
+type tableState struct {
+	columns []ColumnDef
+	rows    [][]string
+	order   []int
+}
+
+type treeState struct {
+	tree        []*TreeNode
+	visibleTree []treeRow
+	expanded    map[*TreeNode]bool
 }
 
 // noWidget is read-only; own gives an element private state before any write.
@@ -307,8 +316,7 @@ type ColumnDef struct {
 
 func Table(columns []ColumnDef, rows [][]string) *Element {
 	e := element(kTable)
-	e.own().columns = append([]ColumnDef(nil), columns...)
-	e.own().rows = rows
+	e.widget.tableState = &tableState{columns: append([]ColumnDef(nil), columns...), rows: rows}
 	return e.Height(260)
 }
 
@@ -323,8 +331,7 @@ type treeRow struct {
 
 func Tree(nodes ...*TreeNode) *Element {
 	e := element(kTree)
-	e.own().tree = nodes
-	e.own().expanded = map[*TreeNode]bool{}
+	e.widget.treeState = &treeState{tree: nodes, expanded: make(map[*TreeNode]bool)}
 	e.rebuildTree()
 	return e.Height(240)
 }
@@ -477,6 +484,8 @@ func (e *Element) SetText(s string) *Element {
 			_, after := e.view.text.Measure(s, e.view.font(e), e.style.bold)
 			layout = layout || before != after
 		}
+		previousText := e.text
+		trimPrefix := e.scrollX == 0 && e.anchor == e.cursor
 		e.text = s
 		if e.editor != nil {
 			e.editor.stale = true
@@ -494,7 +503,7 @@ func (e *Element) SetText(s string) *Element {
 			e.own().scrollX = 0
 		}
 		if e.kind == kInput {
-			e.touchInputText()
+			e.touchInputText(previousText, trimPrefix)
 		} else {
 			e.touch(layout)
 		}
@@ -503,7 +512,7 @@ func (e *Element) SetText(s string) *Element {
 }
 func (e *Element) Text() string { return e.text }
 
-func (e *Element) touchInputText() {
+func (e *Element) touchInputText(previousText string, trimPrefix bool) {
 	v := e.view
 	if v == nil {
 		return
@@ -515,8 +524,35 @@ func (e *Element) touchInputText() {
 	// The input's border and background are independent of its text.
 	v.accessDirty = true
 	v.scrolling = nil
-	v.damage(v.inputInner(e).intersect(e.clip).pixels(v.scale))
+	inner := v.inputInner(e)
+	if !e.password {
+		before, after := previousText, e.text
+		if before == "" {
+			before = e.emptyFieldText()
+		}
+		if after == "" {
+			after = e.emptyFieldText()
+		}
+		trimPrefix = trimPrefix && v.focused != e && previousText != "" && e.text != ""
+		inner = v.changedTextBox(inner, before, after, v.font(e), trimPrefix)
+	}
+	v.damage(inner.intersect(e.clip).pixels(v.scale))
+	if e.floatingLabel != "" && (previousText == "") != (e.text == "") {
+		v.damageFloatingTitle(e)
+	}
 	v.host.Invalidate()
+}
+
+// Include fractional origins, glyph bearings and the caret. Unknown or
+// complex text keeps the full control clip.
+func (v *view) changedTextBox(box Rect, before, after string, font float32, trimPrefix bool) Rect {
+	if left, right, ok := v.text.EditBounds(before, after, font*v.scale, trimPrefix); ok {
+		end := min(box.W, float32(right+1)/v.scale+2)
+		start := min(end, max(0, float32(left-1)/v.scale-2))
+		box.X += start
+		box.W = end - start
+	}
+	return box
 }
 
 func (e *Element) SetChecked(checked bool) *Element {
@@ -615,6 +651,21 @@ func (e *Element) SetSelected(i int) *Element {
 				v.damage(e.rowPixels(i, v.scale))
 				v.host.Invalidate()
 			}
+		} else if e.kind == kSelect && e.floatingLabel != "" && v != nil && !v.needsLayout && !v.size.Empty() {
+			frame := e.rect
+			if e.captionControl() != nil {
+				frame = floatingFrame(frame)
+			}
+			v.accessDirty = true
+			v.scrolling = nil
+			before, _ := e.selectLabel(old)
+			after, _ := e.selectLabel(i)
+			box := v.changedTextBox(selectTextBox(frame), before, after, v.font(e), false)
+			v.damage(box.intersect(e.clip).pixels(v.scale))
+			if e.hasOptionText(old) != e.hasOptionText(i) {
+				v.damageFloatingTitle(e)
+			}
+			v.host.Invalidate()
 		} else {
 			e.touch(false)
 		}
@@ -623,7 +674,11 @@ func (e *Element) SetSelected(i int) *Element {
 }
 func (e *Element) Selected() int { return e.selected }
 func (e *Element) SetRows(rows [][]string) *Element {
-	e.own().rows = rows
+	w := e.own()
+	if w.tableState == nil {
+		w.tableState = &tableState{}
+	}
+	w.rows = rows
 	e.clearRowLabels()
 	e.own().order = nil
 	e.own().selected = -1

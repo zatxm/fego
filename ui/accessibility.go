@@ -65,6 +65,9 @@ func (v *view) updateAccessibility() {
 			return
 		}
 		label := e.label
+		if e.floatingLabel != "" {
+			label = e.floatingLabel
+		}
 		value := ""
 		if label == "" && e.kind != kInput && e.kind != kEditor {
 			label = e.text

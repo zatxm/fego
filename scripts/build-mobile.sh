@@ -98,7 +98,7 @@ ios|ios-framework)
   else
     app="$tmp/Payload/Fego.app"
     mkdir -p "$app"
-    "$CC" -isysroot "$sysroot" -target "$triple" -fobjc-arc "$root/mobile/ios/main.m" -I"$root/mobile/ios" "$tmp/FegoMobile.a" -framework UIKit -framework QuartzCore -framework CoreGraphics -framework Foundation -framework CoreFoundation -framework Security -lresolv -o "$app/Fego"
+    "$CC" -isysroot "$sysroot" -target "$triple" -fobjc-arc "$root/mobile/ios/main.m" -I"$root/mobile/ios" "$tmp/FegoMobile.a" -framework UIKit -framework CoreText -framework QuartzCore -framework CoreGraphics -framework Foundation -framework CoreFoundation -framework Security -lresolv -o "$app/Fego"
     cp "$root/mobile/ios/Info.plist" "$app/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier $app_id" "$app/Info.plist"
     /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion $deployment" "$app/Info.plist"

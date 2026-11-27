@@ -111,7 +111,7 @@ func Build() *ui.Document {
 				}
 				progress.SetValue(n)
 			})),
-			ui.Card(ui.Text("输入与选择").FontSize(17).Bold(), ui.TextInput("").Placeholder("搜索你关心的内容…"), ui.TextArea("你好，fego。\n这里的文本框支持选择、剪贴板与撤销。"), ui.Select([]string{"简体中文", "English", "日本語"}, 0)),
+			ui.Card(ui.Text("输入与选择").FontSize(17).Bold(), ui.TextInput("").FloatingLabel("搜索"), ui.TextArea("你好，fego。\n这里的文本框支持选择、剪贴板与撤销。"), ui.Select([]string{"简体中文", "English", "日本語"}, 0).FloatingLabel("语言")),
 			ui.Card(ui.Text("日期与组合输入").FontSize(17).Bold(), ui.Field("交付日期", date.Element, ""), ui.Field("工作量", number.Element, ""), ui.Field("负责团队", combo.Element, "")),
 			ui.Card(ui.Text("分页").FontSize(17).Bold(), ui.PaginationWithTotal(5, 240, 23941, nil)),
 		).Grow(1),
