@@ -3,6 +3,7 @@
 #include "_cgo_export.h"
 #include <android/bitmap.h>
 #include <jni.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,7 +24,7 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *jvm, void *unused) {
         return JNI_ERR;
     host = (*env)->NewGlobalRef(env, cls);
     wake = (*env)->GetStaticMethodID(env, cls, "wake", "()V");
-    tile = (*env)->GetMethodID(env, cls, "tile", "(II)Landroid/graphics/Bitmap;");
+    tile = (*env)->GetMethodID(env, cls, "tile", "(IIIIIII)Landroid/graphics/Bitmap;");
     current = (*env)->GetStaticMethodID(env, cls, "currentView", "()Lorg/fego/FegoActivity$Surface;");
     if (!host || !wake || !tile || !current)
         return JNI_ERR;
@@ -44,6 +45,25 @@ void fe_wake(void) {
 }
 
 #define TILE 256
+// A uniform opaque region needs no Java bitmap storage.
+static uint32_t solid_color(const uint8_t *pixels, int w, int h, int stride) {
+    if (pixels[3] != 255)
+        return 0;
+    uint32_t color;
+    memcpy(&color, pixels, sizeof(color));
+    for (int row = 0; row < h; row++) {
+        const uint8_t *line = pixels + row * stride;
+        for (int col = 0; col < w; col++) {
+            uint32_t pixel;
+            memcpy(&pixel, line + col * 4, sizeof(pixel));
+            if (pixel != color)
+                return 0;
+        }
+    }
+    return 0xff000000u | ((uint32_t)pixels[0] << 16) |
+           ((uint32_t)pixels[1] << 8) | pixels[2];
+}
+
 void fe_upload(int x, int y, int width, int height, int stride, const void *pixels) {
     JNIEnv *env = frame_env;
     jobject view = frame_view;
@@ -63,14 +83,16 @@ void fe_upload(int x, int y, int width, int height, int stride, const void *pixe
             int tx = left / TILE, dx = left % TILE, w = TILE - dx;
             if (w > x + width - left)
                 w = x + width - left;
-            jobject bitmap = (*env)->CallObjectMethod(env, view, tile, tx, ty);
+            const uint8_t *src = (const uint8_t *)pixels + (top - y) * stride + (left - x) * 4;
+            uint32_t color = solid_color(src, w, h, stride);
+            jobject bitmap = (*env)->CallObjectMethod(env, view, tile, tx, ty, dx, dy, w, h, (jint)color);
             AndroidBitmapInfo info;
             void *dst;
             if (bitmap && AndroidBitmap_getInfo(env, bitmap, &info) == 0 && dx + w <= (int)info.width &&
                 dy + h <= (int)info.height && AndroidBitmap_lockPixels(env, bitmap, &dst) == 0) {
                 for (int row = 0; row < h; row++)
                     memcpy((char *)dst + (dy + row) * info.stride + dx * 4,
-                           (const char *)pixels + (top - y + row) * stride + (left - x) * 4, w * 4);
+                           src + row * stride, w * 4);
                 AndroidBitmap_unlockPixels(env, bitmap);
             }
             if (bitmap)
