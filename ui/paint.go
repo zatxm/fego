@@ -605,6 +605,9 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 		ink := fg
 		if text == "" {
 			text = e.emptyFieldText()
+			if v.showsFieldHint(e) {
+				text = e.placeholder
+			}
 			password = false
 			ink = t.Muted
 		}

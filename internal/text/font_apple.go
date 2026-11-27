@@ -1,3 +1,5 @@
+//go:build (darwin || ios) && cgo
+
 package text
 
 /*
@@ -6,10 +8,12 @@ package text
 #include <limits.h>
 #include <stdbool.h>
 
-static int chineseFont(int bold, char *path, char *name) {
-	CTFontRef font = CTFontCreateWithName(bold ? CFSTR("PingFangSC-Semibold") : CFSTR("PingFangSC-Regular"), 16, NULL);
+static int installedFont(int bold, int cjk, char *path, char *name) {
+	CTFontRef font = cjk
+		? CTFontCreateWithName(bold ? CFSTR("PingFangSC-Semibold") : CFSTR("PingFangSC-Regular"), 16, NULL)
+		: CTFontCreateUIFontForLanguage(bold ? kCTFontUIFontEmphasizedSystem : kCTFontUIFontSystem, 16, NULL);
 	if (!font) return 0;
-	UniChar ch = 0x4e2d;
+	UniChar ch = cjk ? 0x4e2d : 'A';
 	CGGlyph glyph;
 	CFURLRef url = CTFontCopyAttribute(font, kCTFontURLAttribute);
 	CFStringRef ps = CTFontCopyPostScriptName(font);
@@ -30,16 +34,19 @@ import (
 	"golang.org/x/image/font/sfnt"
 )
 
-func init() { systemCJK = installedChineseFont }
+func init() {
+	systemLatin = func(s *System, bold bool) *source { return installedAppleFont(s, bold, 0) }
+	systemCJK = func(s *System, bold bool) *source { return installedAppleFont(s, bold, 1) }
+}
 
-func installedChineseFont(s *System, bold bool) *source {
+func installedAppleFont(s *System, bold bool, cjk C.int) *source {
 	var path [C.PATH_MAX]C.char
 	var name [256]C.char
 	weight := C.int(0)
 	if bold {
 		weight = 1
 	}
-	if C.chineseFont(weight, &path[0], &name[0]) == 0 {
+	if C.installedFont(weight, cjk, &path[0], &name[0]) == 0 {
 		return nil
 	}
 	filename, postscript := C.GoString(&path[0]), C.GoString(&name[0])

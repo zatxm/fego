@@ -462,12 +462,18 @@ func (v *view) focus(e *Element) {
 	old := v.focused
 	v.focused = e
 	if old != nil {
+		if old.kind == kInput && old.floatingLabel != "" && old.text == "" && old.placeholder != "" {
+			v.damageFloatingTitle(old)
+		}
 		if old.pagination == pageEntry {
 			old.closePageEntry()
 		}
 		v.invalidate(old, false)
 	}
 	if e != nil {
+		if e.text == "" && v.showsFieldHint(e) {
+			v.damageFloatingTitle(e)
+		}
 		v.invalidate(e, false)
 		for parent := e.parent; parent != nil; parent = parent.parent {
 			if !parent.scrollable {

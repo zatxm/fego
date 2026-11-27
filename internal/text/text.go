@@ -156,7 +156,13 @@ func (s *System) latin(weight int) *source {
 	if src := s.regular[weight]; src != nil {
 		return src
 	}
-	src := s.openCandidates(fontCandidates("latin", weight == 1))
+	var src *source
+	if systemLatin != nil {
+		src = systemLatin(s, weight == 1)
+	}
+	if src == nil {
+		src = s.openCandidates(fontCandidates("latin", weight == 1))
+	}
 	if src == nil {
 		src = &source{font: bundled()[weight], name: "bundled Go"}
 	}
@@ -837,8 +843,8 @@ type candidate struct {
 	index int
 }
 
-// iOS resolves installed font assets through Core Text, since their paths vary by OS.
-var systemCJK func(*System, bool) *source
+// Platform lookups resolve installed fonts without assuming their file paths.
+var systemLatin, systemCJK func(*System, bool) *source
 
 func (s *System) openCJK(bold bool) *source {
 	if systemCJK != nil {
@@ -908,7 +914,12 @@ func fontCandidates(kind string, bold bool) []candidate {
 	case "android":
 		switch kind {
 		case "latin":
-			return []candidate{{"/system/fonts/Roboto-Regular.ttf", 0}, {"/system/fonts/RobotoStatic-Regular.ttf", 0}}
+			return []candidate{
+				{"/system/fonts/Roboto-" + suffix + ".ttf", 0},
+				{"/system/fonts/RobotoStatic-" + suffix + ".ttf", 0},
+				{"/system/fonts/Roboto-Regular.ttf", 0},
+				{"/system/fonts/RobotoStatic-Regular.ttf", 0},
+			}
 		case "cjk":
 			// Some Android images ship a variable CFF2 sans face which
 			// sfnt cannot open, alongside a static, fully usable serif face.

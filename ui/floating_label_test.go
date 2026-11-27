@@ -31,7 +31,7 @@ func TestFloatingLabelEditingAndSelection(t *testing.T) {
 				}
 				geometry := input.Bounds()
 				h.Click(30, 30)
-				check(input, false)
+				check(input, true)
 				h.Type("密")
 				check(input, true)
 				h.Type("码")
@@ -49,12 +49,12 @@ func TestFloatingLabelEditingAndSelection(t *testing.T) {
 				}
 				h.Key("a", false, true)
 				h.Key("Backspace", false, false)
-				check(input, false)
+				check(input, true)
 				h.Key("z", false, true)
 				check(input, true)
 				input.SetText("")
 				h.Step()
-				check(input, false)
+				check(input, true)
 				if input.Bounds() != geometry {
 					t.Fatal("entering and clearing text moved the field")
 				}

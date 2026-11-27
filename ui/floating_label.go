@@ -1,7 +1,7 @@
 package ui
 
 // FloatingLabel shows title inside an empty text input, text area or select.
-// A nonempty value moves the title into the top outline. Pass "" to restore
+// A value or a focused placeholder moves the title into the top outline. Pass "" to restore
 // the original placeholder, outline and accessible name.
 func (e *Element) FloatingLabel(title string) *Element {
 	if e.style.tone == groupSurface {
@@ -60,6 +60,10 @@ func floatingFrame(r Rect) Rect {
 	return Rect{r.X, r.Y + inset, r.W, r.H - inset}
 }
 
+func (v *view) showsFieldHint(e *Element) bool {
+	return v.focused == e && e.kind == kInput && e.floatingLabel != "" && e.placeholder != ""
+}
+
 func (e *Element) emptyFieldText() string {
 	if e.floatingLabel != "" {
 		return e.floatingLabel
@@ -85,7 +89,7 @@ func (v *view) floatingTitleBounds(p *Painter, field *Element, frame Rect) Rect 
 		if !field.hasOptionText(field.selected) {
 			return Rect{}
 		}
-	} else if field.text == "" {
+	} else if field.text == "" && !v.showsFieldHint(field) {
 		return Rect{}
 	}
 	x := field.rect.X + 12

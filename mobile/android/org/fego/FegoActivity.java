@@ -12,6 +12,7 @@ import android.view.inputmethod.*;
 import android.widget.*;
 import java.lang.ref.WeakReference;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import org.json.*;
 
 public final class FegoActivity extends Activity {
@@ -82,6 +83,12 @@ public final class FegoActivity extends Activity {
   public void onBackPressed() {
     event(5, null, 0, 0);
     surface.postInvalidateOnAnimation();
+  }
+
+  @Override
+  protected void onStop() {
+    surface.releaseTiles();
+    super.onStop();
   }
 
   @Override
@@ -195,7 +202,7 @@ public final class FegoActivity extends Activity {
     final FegoActivity app;
     final Paint paint = new Paint();
     Bitmap[] tiles = new Bitmap[0];
-    int cols, pointer = -1;
+    int cols, visibleTiles, pointer = -1;
     boolean reset = true;
     final FegoAccess access;
 
@@ -230,23 +237,33 @@ public final class FegoActivity extends Activity {
 
     @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
-      cols = (w + TILE - 1) / TILE;
-      tiles = new Bitmap[cols * ((h + TILE - 1) / TILE)];
+      int columns = (w + TILE - 1) / TILE;
+      visibleTiles = columns * ((h + TILE - 1) / TILE);
+      if (columns != cols) tiles = new Bitmap[0];
+      cols = columns;
+      reset = true;
+    }
+
+    void releaseTiles() {
+      tiles = new Bitmap[0];
       reset = true;
     }
 
     Bitmap tile(int col, int row) {
       int i = row * cols + col;
-      if (col < 0 || col >= cols || row < 0 || i >= tiles.length) return null;
-      if (tiles[i] == null) {
-        tiles[i] =
-            Bitmap.createBitmap(
-                Math.min(TILE, getWidth() - col * TILE),
-                Math.min(TILE, getHeight() - row * TILE),
-                Bitmap.Config.ARGB_8888);
-        tiles[i].setDensity(Bitmap.DENSITY_NONE);
+      if (col < 0 || col >= cols || row < 0 || i >= visibleTiles) return null;
+      // Keep tiles across keyboard and inset animations. Only a growing
+      // edge or a newly visible row needs a new bitmap.
+      if (tiles.length < visibleTiles) tiles = Arrays.copyOf(tiles, visibleTiles);
+      Bitmap tile = tiles[i];
+      int width = Math.min(TILE, getWidth() - col * TILE);
+      int height = Math.min(TILE, getHeight() - row * TILE);
+      if (tile == null || tile.getWidth() < width || tile.getHeight() < height) {
+        tile = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        tile.setDensity(Bitmap.DENSITY_NONE);
+        tiles[i] = tile;
       }
-      return tiles[i];
+      return tile;
     }
 
     @Override
@@ -267,7 +284,7 @@ public final class FegoActivity extends Activity {
           throw new IllegalStateException(ex);
         }
       }
-      for (int i = 0; i < tiles.length; i++)
+      for (int i = 0; i < Math.min(visibleTiles, tiles.length); i++)
         if (tiles[i] != null)
           canvas.drawBitmap(tiles[i], (i % cols) * TILE, (i / cols) * TILE, paint);
     }
