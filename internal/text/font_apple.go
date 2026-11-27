@@ -1,4 +1,4 @@
-//go:build (darwin || ios) && cgo
+//go:build ios && cgo
 
 package text
 
@@ -28,12 +28,6 @@ static int installedFont(int bold, int cjk, char *path, char *name) {
 */
 import "C"
 
-import (
-	"os"
-
-	"golang.org/x/image/font/sfnt"
-)
-
 func init() {
 	systemLatin = func(s *System, bold bool) *source { return installedAppleFont(s, bold, 0) }
 	systemCJK = func(s *System, bold bool) *source { return installedAppleFont(s, bold, 1) }
@@ -49,25 +43,5 @@ func installedAppleFont(s *System, bold bool, cjk C.int) *source {
 	if C.installedFont(weight, cjk, &path[0], &name[0]) == 0 {
 		return nil
 	}
-	filename, postscript := C.GoString(&path[0]), C.GoString(&name[0])
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil
-	}
-	collection, err := sfnt.ParseCollectionReaderAt(file)
-	if err == nil {
-		for i := 0; i < collection.NumFonts(); i++ {
-			f, err := collection.Font(i)
-			if err != nil {
-				continue
-			}
-			if n, _ := f.Name(&s.buffer, sfnt.NameIDPostScript); n == postscript {
-				src := &source{font: f, file: file, name: filename, index: i}
-				s.sources = append(s.sources, src)
-				return src
-			}
-		}
-	}
-	file.Close()
-	return nil
+	return s.openNamedFont(C.GoString(&path[0]), C.GoString(&name[0]))
 }

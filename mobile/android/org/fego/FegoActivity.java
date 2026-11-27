@@ -86,6 +86,15 @@ public final class FegoActivity extends Activity {
   }
 
   @Override
+  protected void onResume() {
+    super.onResume();
+    // Android can reuse the view's display list without calling onDraw
+    // when returning to an Activity with unchanged dimensions.
+    surface.reset = true;
+    surface.invalidate();
+  }
+
+  @Override
   protected void onStop() {
     surface.releaseTiles();
     super.onStop();

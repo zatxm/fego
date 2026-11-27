@@ -405,6 +405,15 @@ func testX11Native(t *testing.T, shm bool) {
 			if events[Paint] != before+2 || lastPaint.X != 5 || lastPaint.Y != 2 || lastPaint.Width != 39 || lastPaint.Height != 24 {
 				t.Errorf("expose series paint=%+v", lastPaint)
 			}
+			// Remapping an unchanged window must repaint without an Expose.
+			resizes := events[Resize]
+			var mapped xEvent
+			*(*xAny)(unsafe.Pointer(&mapped)) = xAny{Kind: xMap, Display: b.display, Window: w.id}
+			b.event(&mapped)
+			b.emitResizes()
+			if events[Resize] != resizes+1 {
+				t.Error("remapped window did not request a full repaint")
+			}
 			// A cropped image with a nonzero origin still targets client coordinates.
 			parent := image.NewRGBA(image.Rect(10, 20, 174, 124))
 			cropped := parent.SubImage(image.Rect(12, 22, 172, 122)).(*image.RGBA)

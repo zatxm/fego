@@ -743,7 +743,12 @@ func (b *xBackend) event(raw *xEvent) {
 		} else {
 			w.emit(Event{Kind: Paint, X: float32(lost.Min.X), Y: float32(lost.Min.Y), Width: lost.Dx(), Height: lost.Dy()})
 		}
-	case xMap, xReparent:
+	case xMap:
+		// A remapped window can have lost every server/backbuffer pixel,
+		// even if the window manager supplies no new Configure or Expose.
+		w.refreshAccessibility()
+		w.resized()
+	case xReparent:
 		w.refreshAccessibility()
 	case xConfigure:
 		e := (*xConfigureEvent)(unsafe.Pointer(raw))
