@@ -66,12 +66,29 @@ func TestX11InitialDeviceSize(t *testing.T) {
 	b := native.(*xBackend)
 	defer b.release()
 	var initial Event
-	_, err = b.Open(Options{Title: "Initial device size", Width: 320, Height: 200}, func(event Event) { initial = event })
+	window, err := b.Open(Options{Title: "Initial device size", Width: 320, Height: 200, Minimum: image.Pt(240, 120)}, func(event Event) { initial = event })
 	if err != nil {
 		t.Fatal(err)
 	}
 	if initial.Kind != Resize || initial.Width != 480 || initial.Height != 300 || initial.Scale != 1.5 {
 		t.Fatal("first frame would use logical instead of device dimensions", initial)
+	}
+	var kind uintptr
+	var format int32
+	var count, rest uint64
+	var data *byte
+	prop := xl.internAtom(b.display, "WM_NORMAL_HINTS", 0)
+	hintType := xl.internAtom(b.display, "WM_SIZE_HINTS", 0)
+	status := xl.getProperty(b.display, window.(*xWindow).id, prop, 0, 18, 0, hintType, &kind, &format, &count, &rest, &data)
+	if data != nil {
+		defer xl.free(unsafe.Pointer(data))
+	}
+	if status != 0 || kind != hintType || format != 32 || count != 18 || data == nil {
+		t.Fatal("missing WM_NORMAL_HINTS", status, kind, format, count)
+	}
+	hints := unsafe.Slice((*uintptr)(unsafe.Pointer(data)), 18)
+	if hints[0]&(1<<4) == 0 || hints[5] != 360 || hints[6] != 180 {
+		t.Fatal("incorrect minimum at 150% display scale", hints)
 	}
 }
 

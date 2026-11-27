@@ -35,6 +35,8 @@ var (
 	winEndPaint       = winUser.NewProc("EndPaint")
 	winGetKeyState    = winUser.NewProc("GetKeyState")
 	winDPI            = winUser.NewProc("GetDpiForWindow")
+	winAdjustForDPI   = winUser.NewProc("AdjustWindowRectExForDpi")
+	winAdjustFrame    = winUser.NewProc("AdjustWindowRectEx")
 	winSetPos         = winUser.NewProc("SetWindowPos")
 	winSetTitle       = winUser.NewProc("SetWindowTextW")
 	winLoadCursor     = winUser.NewProc("LoadCursorW")
@@ -67,6 +69,10 @@ const winWakeMessage = 0x8001
 
 type winPoint struct{ X, Y int32 }
 type winRect struct{ Left, Top, Right, Bottom int32 }
+type winMinMaxInfo struct{ Reserved, MaxSize, MaxPosition, MinTrackSize, MaxTrackSize winPoint }
+
+const winWindowStyle = 0x00cf0000
+
 type winMessage struct {
 	HWND           uintptr
 	Message        uint32
@@ -113,6 +119,7 @@ type windowsBackend struct {
 	closed         atomic.Bool
 }
 type windowsWindow struct {
+	minimum  image.Point
 	graphics gpuState
 	access   *winAccessTree
 	title    string
@@ -163,18 +170,16 @@ func New(dispatch func()) (Backend, error) {
 }
 
 func (b *windowsBackend) Open(o Options, events func(Event)) (Window, error) {
-	w := &windowsWindow{backend: b, events: events, title: o.Title}
+	w := &windowsWindow{backend: b, events: events, title: o.Title, minimum: o.Minimum}
 	class, title := winUTF16("FegoNativeWindow"), winUTF16(o.Title)
 	scale := uintptr(96)
 	dpi := winUser.NewProc("GetDpiForSystem")
 	if dpi.Find() == nil {
 		scale, _, _ = dpi.Call()
 	}
-	rect := winRect{Right: int32(o.Width) * int32(scale) / 96, Bottom: int32(o.Height) * int32(scale) / 96}
-	const style = 0x00cf0000
-	winUser.NewProc("AdjustWindowRectEx").Call(uintptr(unsafe.Pointer(&rect)), style, 0, 0)
+	rect := windowFrame(o.Width, o.Height, scale)
 	b.creating = w
-	hwnd, _, err := winCreate.Call(0, uintptr(unsafe.Pointer(&class[0])), uintptr(unsafe.Pointer(&title[0])), style, 0x80000000, 0x80000000, uintptr(rect.Right-rect.Left), uintptr(rect.Bottom-rect.Top), 0, 0, b.instance, 0)
+	hwnd, _, err := winCreate.Call(0, uintptr(unsafe.Pointer(&class[0])), uintptr(unsafe.Pointer(&title[0])), winWindowStyle, 0x80000000, 0x80000000, uintptr(rect.Right-rect.Left), uintptr(rect.Bottom-rect.Top), 0, 0, b.instance, 0)
 	b.creating = nil
 	if hwnd == 0 {
 		return nil, fmt.Errorf("create window: %w", err)
@@ -290,9 +295,17 @@ func (w *windowsWindow) SetTitle(s string) {
 	t := winUTF16(s)
 	winSetTitle.Call(w.hwnd, uintptr(unsafe.Pointer(&t[0])))
 }
+func windowFrame(width, height int, dpi uintptr) winRect {
+	r := winRect{Right: int32((int64(width)*int64(dpi) + 48) / 96), Bottom: int32((int64(height)*int64(dpi) + 48) / 96)}
+	if winAdjustForDPI.Find() == nil {
+		winAdjustForDPI.Call(uintptr(unsafe.Pointer(&r)), winWindowStyle, 0, 0, dpi)
+	} else {
+		winAdjustFrame.Call(uintptr(unsafe.Pointer(&r)), winWindowStyle, 0, 0)
+	}
+	return r
+}
 func (w *windowsWindow) SetSize(width, height int) {
-	r := winRect{Right: int32(float32(width) * w.scale()), Bottom: int32(float32(height) * w.scale())}
-	winUser.NewProc("AdjustWindowRectEx").Call(uintptr(unsafe.Pointer(&r)), 0x00cf0000, 0, 0)
+	r := windowFrame(width, height, uintptr(w.scale()*96+0.5))
 	winSetPos.Call(w.hwnd, 0, 0, 0, uintptr(r.Right-r.Left), uintptr(r.Bottom-r.Top), 6)
 }
 func (w *windowsWindow) SetCursor(name string) {
@@ -492,6 +505,14 @@ func windowProcedure(hwnd uintptr, message uint32, wp, lp uintptr) uintptr {
 	}
 	emit := func(e Event) { w.events(winModifiers(e)) }
 	switch message {
+	case 0x0024: // WM_GETMINMAXINFO arrives before the window manager applies a drag.
+		if w.minimum != (image.Point{}) {
+			info := (*winMinMaxInfo)(nativeAddress(lp))
+			frame := windowFrame(w.minimum.X, w.minimum.Y, uintptr(w.scale()*96+0.5))
+			info.MinTrackSize.X = max(info.MinTrackSize.X, frame.Right-frame.Left)
+			info.MinTrackSize.Y = max(info.MinTrackSize.Y, frame.Bottom-frame.Top)
+			return 0
+		}
 	case 0x3d:
 		if int32(lp) == -4 && w.access != nil {
 			if object := w.access.object(0); object != nil {

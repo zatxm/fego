@@ -44,6 +44,7 @@ type Options struct {
 	X11Render          bool
 	Title, AppID       string
 	Width, Height      int
+	Minimum            image.Point
 	Icon, TitleBarIcon *image.NRGBA
 }
 

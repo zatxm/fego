@@ -306,6 +306,9 @@ func (b *cocoaBackend) Open(o Options, events func(Event)) (Window, error) {
 	macSend(win, "setTitle:", uintptr(macString(o.Title)))
 	macSend(win, "setDelegate:", uintptr(delegate))
 	macSend(win, "setContentView:", uintptr(view))
+	if o.Minimum != (image.Point{}) {
+		mac.setSize(win, macSel("setContentMinSize:"), NSSize{Width: float64(o.Minimum.X), Height: float64(o.Minimum.Y)})
+	}
 	macSend(win, "setAcceptsMouseMovedEvents:", 1)
 	macSend(view, "setAutoresizingMask:", 18)
 	tracking := mac.initTracking(macSend(macClass("NSTrackingArea"), "alloc"), macSel("initWithRect:options:owner:userInfo:"), NSRect{}, 2|0x20|0x200, view, 0)

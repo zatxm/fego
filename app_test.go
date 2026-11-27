@@ -16,7 +16,7 @@ type testBackend struct {
 }
 
 func (b *testBackend) Open(o platform.Options, fn func(Event)) (platform.Window, error) {
-	w := &testWindow{event: fn}
+	w := &testWindow{event: fn, options: o}
 	b.windows = append(b.windows, w)
 	fn(Event{Kind: Resize, Width: o.Width, Height: o.Height, Scale: 2})
 	return w, nil
@@ -26,6 +26,8 @@ func (b *testBackend) Wake()      { b.wakes.Add(1) }
 func (b *testBackend) Quit()      { b.quits++ }
 
 type testWindow struct {
+	options    platform.Options
+	size       image.Point
 	event      func(Event)
 	closed     int
 	inputCalls int
@@ -33,7 +35,7 @@ type testWindow struct {
 
 func (w *testWindow) Present(*image.RGBA, []image.Rectangle) {}
 func (w *testWindow) SetTitle(string)                        {}
-func (w *testWindow) SetSize(int, int)                       {}
+func (w *testWindow) SetSize(width, height int)              { w.size = image.Pt(width, height) }
 func (w *testWindow) SetCursor(string)                       {}
 func (w *testWindow) SetClipboard(string)                    {}
 func (w *testWindow) Clipboard() string                      { return "" }
@@ -86,6 +88,25 @@ func TestQueuedRetainedPaintKeepsNativeExpose(t *testing.T) {
 	}
 	w.Destroy()
 	a.dispatch()
+}
+
+func TestDesktopMinimumSize(t *testing.T) {
+	a := NewApp()
+	backend := &testBackend{}
+	a.backend = backend
+	w, err := a.NewWindow(WindowOptions{Content: &testContent{}, Width: 400, Height: 700, MinWidth: 960, MinHeight: 594})
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := backend.windows[0]
+	if o := native.options; o.Minimum != image.Pt(960, 594) || o.Width != 960 || o.Height != 700 {
+		t.Fatal("incorrect initial window geometry", o)
+	}
+	w.SetSize(1100, 400)
+	a.dispatch()
+	if native.size != image.Pt(1100, 594) {
+		t.Fatal("programmatic resize bypassed minimum", native.size)
+	}
 }
 
 func TestConcurrentPostAndShutdown(t *testing.T) {

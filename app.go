@@ -54,13 +54,14 @@ type View interface {
 }
 
 type WindowOptions struct {
-	Title         string
-	Width, Height int // initial logical pixels
-	Content       Content
-	GPU           bool        // opt in to hardware presentation when available
-	X11Render     bool        // use the X server for GPU presentation on Linux; custom GLSL requires OpenGL
-	Icon          image.Image // overrides the application icon
-	TitleBarIcon  image.Image // optional title-bar accessory on macOS
+	Title               string
+	Width, Height       int // initial logical pixels
+	MinWidth, MinHeight int // minimum desktop content size in logical pixels; zero leaves that axis unconstrained
+	Content             Content
+	GPU                 bool        // opt in to hardware presentation when available
+	X11Render           bool        // use the X server for GPU presentation on Linux; custom GLSL requires OpenGL
+	Icon                image.Image // overrides the application icon
+	TitleBarIcon        image.Image // optional title-bar accessory on macOS
 }
 
 // AppOptions sets application identity and lifetime before Run.
@@ -221,6 +222,8 @@ func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
 	if o.Height <= 0 {
 		o.Height = 640
 	}
+	minimum := image.Pt(max(0, o.MinWidth), max(0, o.MinHeight))
+	o.Width, o.Height = max(o.Width, minimum.X), max(o.Height, minimum.Y)
 	icon := a.icon
 	if o.Icon != nil {
 		var err error
@@ -236,9 +239,9 @@ func (a *Application) NewWindow(o WindowOptions) (*Window, error) {
 	if o.Title == "" {
 		o.Title = a.options.Name
 	}
-	w := &Window{app: a, width: o.Width, height: o.Height, scale: 1}
+	w := &Window{app: a, width: o.Width, height: o.Height, scale: 1, minimum: minimum}
 	n, err := a.backend.Open(platform.Options{
-		Title: o.Title, Width: o.Width, Height: o.Height, AppID: a.options.ID,
+		Title: o.Title, Width: o.Width, Height: o.Height, AppID: a.options.ID, Minimum: minimum,
 		Icon: icon, TitleBarIcon: titleBarIcon, X11Render: o.X11Render,
 	}, w.event)
 	if err != nil {
@@ -262,6 +265,7 @@ func Run(o WindowOptions) error {
 }
 
 type Window struct {
+	minimum                image.Point
 	app                    *Application
 	native                 platform.Window
 	view                   View
@@ -521,7 +525,7 @@ func (w *Window) SetTitle(title string) {
 func (w *Window) SetSize(width, height int) {
 	w.app.Post(func() {
 		if !w.closed {
-			w.native.SetSize(width, height)
+			w.native.SetSize(max(width, w.minimum.X), max(height, w.minimum.Y))
 		}
 	})
 }

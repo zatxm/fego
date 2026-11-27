@@ -9,6 +9,7 @@ import (
 
 // These are compile-time assertions, including when cross-compiling.
 var (
+	_ [40]byte = [unsafe.Sizeof(winMinMaxInfo{})]byte{}
 	_ [80]byte = [unsafe.Sizeof(winClass{})]byte{}
 	_ [48]byte = [unsafe.Sizeof(winMessage{})]byte{}
 	_ [72]byte = [unsafe.Sizeof(winPaint{})]byte{}

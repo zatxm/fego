@@ -441,6 +441,15 @@ func (b *xBackend) Open(o Options, emit func(Event)) (Window, error) {
 	xl.setProtocols(b.display, id, &b.wmDelete, 1)
 	x.SetTitle(o.Title)
 	x.setIdentity(o)
+	if o.Minimum != (image.Point{}) {
+		// ICCCM WM_SIZE_HINTS uses 18 32-bit fields, passed to Xlib as longs.
+		const wmNormalHints, wmSizeHints, pMinSize = 40, 41, 1 << 4
+		hints := [18]uintptr{0: pMinSize,
+			5: uintptr(math.Round(float64(o.Minimum.X) * float64(b.scale))),
+			6: uintptr(math.Round(float64(o.Minimum.Y) * float64(b.scale))),
+		}
+		xl.changeProperty(b.display, id, wmNormalHints, wmSizeHints, 32, 0, unsafe.Pointer(&hints[0]), int32(len(hints)))
+	}
 	xl.mapWindow(b.display, id)
 	xl.flush(b.display)
 	emit(Event{Kind: Resize, Width: w, Height: h, Scale: b.scale})
