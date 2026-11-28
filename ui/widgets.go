@@ -256,7 +256,10 @@ func Dialog(title string, content *Element, actions ...*Element) *Element {
 		}
 	})
 	header := Row(Text(title).FontSize(18).Bold().Grow(1), close).AlignItems(Start)
-	children := []*Element{header, content}
+	// An oversized message scrolls independently of the title and actions.
+	body := Box(content).FillWidth()
+	body.style.grow = content.growth(false)
+	children := []*Element{header, body}
 	if len(actions) > 0 {
 		children = append(children, Row(actions...).Justify(End))
 	}

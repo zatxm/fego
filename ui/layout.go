@@ -44,7 +44,7 @@ func (v *view) measure(e *Element) (w, h float32) {
 			}
 		}
 	case kText:
-		w, h = v.text.Measure(e.text, font, s.bold)
+		w, h = v.text.Measure(v.labelText(e), font, s.bold)
 	case kRichText:
 		for _, sp := range e.spans {
 			sw, sh := v.text.Measure(sp.Text, font, sp.Bold || s.bold)

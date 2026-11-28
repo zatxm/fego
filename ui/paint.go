@@ -538,7 +538,7 @@ func (v *view) paint(p *Painter, e *Element, disabled bool) {
 			p.RoundRect(Rect{r.X + r.W - 5, y, 3, thumb}, 2, mix(t.Border, t.Muted, .3))
 		}
 	case kText:
-		label(e.text, r, fg, s.bold, false)
+		label(v.labelText(e), r, fg, s.bold, false)
 	case kRichText:
 		x := r.X
 		for _, sp := range e.spans {

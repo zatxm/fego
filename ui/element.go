@@ -479,6 +479,14 @@ func (e *Element) SetText(s string) *Element {
 	if e.text != s {
 		variable := e.kind == kText || e.kind == kButton || e.kind == kCheck || e.kind == kSwitch || e.kind == kRadio
 		layout := variable && e.style.w == 0
+		if !layout && e.kind == kText && e.style.h == 0 && e.view != nil && e.view.dialog != nil {
+			for parent := e.parent; parent != nil; parent = parent.parent {
+				if parent == e.view.dialog {
+					layout = true
+					break
+				}
+			}
+		}
 		if variable && !layout && e.style.h == 0 && e.view != nil {
 			_, before := e.view.text.Measure(e.text, e.view.font(e), e.style.bold)
 			_, after := e.view.text.Measure(s, e.view.font(e), e.style.bold)

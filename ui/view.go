@@ -132,6 +132,7 @@ type view struct {
 	dialogShade             uint8
 	dialogFade              func()
 	dialogPlacement         panelPlacement
+	dialogLines             map[*Element]string
 	drawerDragging          bool
 	drawerOrigin            float32
 	returnFocus             *Element
@@ -269,6 +270,9 @@ func (v *view) frame(force bool) {
 			case bottomPanel:
 				dh = min(dh, r.H*.8)
 				bounds = Rect{0, r.H - dh, r.W, dh}
+			}
+			if v.dialog.style.tone == dialogSurface && v.dialogPlacement == centerPanel {
+				bounds = v.fitDialog(bounds, r)
 			}
 			v.layout(v.dialog, bounds, r)
 		}
@@ -520,6 +524,7 @@ func (d *Document) showDialog(content *Element, placement panelPlacement) {
 		v.dialog.attach(nil)
 		d.dialogDismissed()
 	}
+	v.dialogLines = nil
 	v.dialog = content
 	v.dialogPlacement = placement
 	v.drawerDragging = false
@@ -538,6 +543,7 @@ func (d *Document) CloseDialog() {
 	v.forget(v.dialog)
 	v.dialog.attach(nil)
 	v.dialog = nil
+	v.dialogLines = nil
 	v.drawerDragging = false
 	v.focused = nil
 	if e := v.returnFocus; e != nil && e.view == v {
