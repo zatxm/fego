@@ -33,7 +33,13 @@ var macSystemFonts = sync.OnceValue(func() *macFonts {
 	if err != nil {
 		return nil
 	}
-	f := &macFonts{urlKey: *(*uintptr)(unsafe.Pointer(urlKey))}
+	memcpy, err := purego.Dlsym(purego.RTLD_DEFAULT, "memcpy")
+	if err != nil {
+		return nil
+	}
+	// dlsym returns the address of the exported CFStringRef. Read its value in C.
+	f := &macFonts{}
+	purego.SyscallN(memcpy, uintptr(unsafe.Pointer(&f.urlKey)), urlKey, unsafe.Sizeof(f.urlKey))
 	purego.RegisterLibFunc(&f.uiFont, ct, "CTFontCreateUIFontForLanguage")
 	purego.RegisterLibFunc(&f.attribute, ct, "CTFontCopyAttribute")
 	purego.RegisterLibFunc(&f.name, ct, "CTFontCopyPostScriptName")
